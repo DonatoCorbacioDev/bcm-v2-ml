@@ -11,7 +11,7 @@ venv/
 env/
 ENV/
 
-# Environment variables (mai committare il .env reale)
+# Environment variables — never commit the real .env file
 .env
 
 # Distribution / packaging
