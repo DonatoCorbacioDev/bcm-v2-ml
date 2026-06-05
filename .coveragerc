@@ -1,0 +1,6 @@
+[run]
+source = app
+relative_files = True
+
+[report]
+skip_empty = True
