@@ -163,11 +163,11 @@ def test_compute_risk_scores_structure():
 
 def test_compute_risk_scores_unusual_value():
     today = date.today()
-    contracts = [
-        ContractMock(1, "Normal", today + timedelta(days=365), 1),
-        ContractMock(2, "Outlier", today + timedelta(days=365), 1),
-    ]
-    fv_rows = [FVRowMock(1, 1000.0), FVRowMock(2, 100000.0)]
+    # With 5 contracts at 1000 and 1 at 100000: z ≈ 2.04 > 2 → UNUSUAL_VALUE
+    contracts = [ContractMock(i, f"Normal{i}", today + timedelta(days=365), 1) for i in range(1, 6)]
+    contracts.append(ContractMock(6, "Outlier", today + timedelta(days=365), 1))
+    fv_rows = [FVRowMock(i, 1000.0) for i in range(1, 6)]
+    fv_rows.append(FVRowMock(6, 100000.0))
     result = compute_risk_scores(make_risk_session(contracts, fv_rows))
-    outlier = next(r for r in result if r["contractId"] == 2)
+    outlier = next(r for r in result if r["contractId"] == 6)
     assert "UNUSUAL_VALUE" in outlier["anomalies"]
