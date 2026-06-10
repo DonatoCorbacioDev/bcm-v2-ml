@@ -117,7 +117,7 @@ reach the host's Ollama instance.
 | `CORS_ORIGINS`    | `http://localhost:3000`       | Comma-separated list of allowed browser origins |
 | `OLLAMA_URL`      | `http://localhost:11434`      | Base URL of the local Ollama server |
 | `OLLAMA_MODEL`    | `llama3.2`                    | Ollama model used for `/agent/insights` |
-| `OLLAMA_TIMEOUT`  | `60.0`                         | Timeout (seconds) for the Ollama request |
+| `OLLAMA_TIMEOUT`  | `120.0`                        | Timeout (seconds) for the Ollama request (covers cold-start model loading) |
 | `REPORT_LANGUAGE` | `italian`                     | Language of the generated report |
 
 ## Testing
