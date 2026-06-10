@@ -7,5 +7,10 @@ class Settings(BaseSettings):
     DB_URL: str
     CORS_ORIGINS: str = "http://localhost:3000"
 
+    OLLAMA_URL: str = "http://localhost:11434"
+    OLLAMA_MODEL: str = "llama3.2"
+    OLLAMA_TIMEOUT: float = 60.0
+    REPORT_LANGUAGE: str = "italian"
+
 
 settings = Settings()
