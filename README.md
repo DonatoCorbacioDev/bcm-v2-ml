@@ -128,3 +128,11 @@ pytest --cov=app --cov-report=term-missing
 
 Coverage is ~100%. HTTP calls to Ollama are mocked in tests — no running
 Ollama instance is required for the test suite or CI.
+
+## License
+
+This project is published as a personal portfolio project - see [LICENSE](./LICENSE) for full details.
+
+**This project itself is NOT open source.** It is licensed under a **Custom Non-Commercial License**: available for review and educational purposes, but commercial use, redistribution, or SaaS offerings are prohibited without written permission.
+
+For commercial licensing inquiries: donatocorbacio92@gmail.com
