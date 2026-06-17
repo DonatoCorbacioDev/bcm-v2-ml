@@ -120,6 +120,27 @@ reach the host's Ollama instance.
 | `OLLAMA_TIMEOUT`  | `120.0`                        | Timeout (seconds) for the Ollama request (covers cold-start model loading) |
 | `REPORT_LANGUAGE` | `italian`                     | Language of the generated report |
 
+## Synthetic data
+
+`scripts/seed_synthetic_data.py` is a standalone offline tool (not part of the
+app or test suite) that seeds `contracts` and `financial_values` with a
+realistic synthetic dataset, so `/forecast` and `/risk-scores` have enough
+data to produce meaningful results in local/dev environments. It requires a
+DB user with write access (this service's own `DB_URL` is read-only by
+convention) and reuses existing `organizations`/`business_areas`/
+`financial_types`. Synthetic rows are tagged with a `SYN-<org>-<seq>` contract
+number so the script can be re-run safely (`--reset` clears previous synthetic
+data first).
+
+```bash
+pip install -r requirements.txt -r scripts/requirements.txt
+python scripts/seed_synthetic_data.py --db-url mysql+pymysql://<user>:<password>@localhost:3307/bcm --reset
+```
+
+See the script's module docstring for the full option list (`--contracts-per-org`,
+`--min-months`/`--max-months`, `--outlier-ratio`, `--seed`) and for running it
+from inside the `ml` container when no local Python is available.
+
 ## Testing
 
 ```bash

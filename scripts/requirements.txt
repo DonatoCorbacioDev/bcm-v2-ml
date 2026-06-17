@@ -1,0 +1,3 @@
+# Extra dependency for scripts/seed_synthetic_data.py only - not needed by the app.
+# Install alongside the main deps: pip install -r requirements.txt -r scripts/requirements.txt
+Faker==40.23.0
