@@ -11,6 +11,9 @@ class MockSession:
     def query(self, *args):
         return self
 
+    def filter(self, *args):
+        return self
+
     def group_by(self, *args):
         return self
 
