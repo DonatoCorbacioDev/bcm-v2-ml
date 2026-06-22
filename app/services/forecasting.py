@@ -4,8 +4,11 @@ from sqlalchemy.orm import Session
 from ..models import FinancialValue
 
 
-def compute_forecast(db: Session, months: int) -> dict:
-    rows = db.query(FinancialValue).all()
+def compute_forecast(db: Session, months: int, org_id: int | None = None) -> dict:
+    query = db.query(FinancialValue)
+    if org_id is not None:
+        query = query.filter(FinancialValue.organization_id == org_id)
+    rows = query.all()
 
     if not rows:
         return {"historical": [], "forecast": []}

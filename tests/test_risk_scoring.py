@@ -171,3 +171,25 @@ def test_compute_risk_scores_unusual_value():
     result = compute_risk_scores(make_risk_session(contracts, fv_rows))
     outlier = next(r for r in result if r["contractId"] == 6)
     assert "UNUSUAL_VALUE" in outlier["anomalies"]
+
+
+def make_org_risk_session(contracts, fv_rows):
+    session = MagicMock()
+    contracts_q = MagicMock()
+    contracts_q.filter.return_value.all.return_value = contracts
+    fv_q = MagicMock()
+    fv_q.filter.return_value.group_by.return_value.all.return_value = fv_rows
+    session.query.side_effect = [contracts_q, fv_q]
+    return session
+
+
+def test_compute_risk_scores_with_org_id_filters_query():
+    today = date.today()
+    contracts = [ContractMock(1, "Acme", today - timedelta(days=5), 7)]
+    fv_rows = [FVRowMock(1, 50000.0)]
+    session = make_org_risk_session(contracts, fv_rows)
+
+    result = compute_risk_scores(session, org_id=7)
+
+    assert len(result) == 1
+    assert result[0]["contractId"] == 1

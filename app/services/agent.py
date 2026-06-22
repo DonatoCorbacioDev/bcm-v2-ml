@@ -69,9 +69,9 @@ def _call_ollama(prompt: str) -> str:
     return response.json()["response"]
 
 
-def generate_insights(db: Session, months: int) -> dict:
-    risk_scores = risk_scoring.compute_risk_scores(db)
-    forecast = forecasting.compute_forecast(db, months)
+def generate_insights(db: Session, months: int, org_id: int | None = None) -> dict:
+    risk_scores = risk_scoring.compute_risk_scores(db, org_id)
+    forecast = forecasting.compute_forecast(db, months, org_id)
 
     report = None
     error = None

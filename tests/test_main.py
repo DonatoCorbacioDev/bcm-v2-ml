@@ -3,6 +3,7 @@ from unittest.mock import patch
 import httpx
 from fastapi.testclient import TestClient
 from app.main import app
+from app.config import settings
 from app.database import get_db
 
 
@@ -92,3 +93,44 @@ def test_agent_insights_months_too_low():
 def test_agent_insights_months_too_high():
     response = client.get("/agent/insights?months=25")
     assert response.status_code == 422
+
+
+def test_risk_scores_accepts_org_id():
+    response = client.get("/risk-scores?org_id=1")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_forecast_accepts_org_id():
+    response = client.get("/forecast?org_id=1")
+    assert response.status_code == 200
+
+
+def test_protected_endpoint_rejects_request_without_key_when_configured():
+    original = settings.INTERNAL_API_KEY
+    settings.INTERNAL_API_KEY = "secret"
+    try:
+        response = client.get("/risk-scores")
+        assert response.status_code == 401
+    finally:
+        settings.INTERNAL_API_KEY = original
+
+
+def test_protected_endpoint_accepts_request_with_correct_key():
+    original = settings.INTERNAL_API_KEY
+    settings.INTERNAL_API_KEY = "secret"
+    try:
+        response = client.get("/risk-scores", headers={"X-Internal-Api-Key": "secret"})
+        assert response.status_code == 200
+    finally:
+        settings.INTERNAL_API_KEY = original
+
+
+def test_health_does_not_require_key():
+    original = settings.INTERNAL_API_KEY
+    settings.INTERNAL_API_KEY = "secret"
+    try:
+        response = client.get("/health")
+        assert response.status_code == 200
+    finally:
+        settings.INTERNAL_API_KEY = original

@@ -12,5 +12,10 @@ class Settings(BaseSettings):
     OLLAMA_TIMEOUT: float = 120.0
     REPORT_LANGUAGE: str = "italian"
 
+    # Shared secret expected on the X-Internal-Api-Key header. Empty disables
+    # the check (local dev); must be set when the service is reachable
+    # outside the backend's trusted network.
+    INTERNAL_API_KEY: str = ""
+
 
 settings = Settings()

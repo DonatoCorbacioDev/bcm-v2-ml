@@ -125,3 +125,13 @@ def test_generate_insights_ollama_unavailable():
         result = generate_insights(db, 3)
     assert result["report"] is None
     assert "Ollama service unavailable" in result["error"]
+
+
+def test_generate_insights_passes_org_id_through():
+    db = MagicMock()
+    with patch("app.services.agent.risk_scoring.compute_risk_scores", return_value=[]) as mock_risk, \
+         patch("app.services.agent.forecasting.compute_forecast", return_value={"historical": [], "forecast": []}) as mock_forecast, \
+         patch("app.services.agent._call_ollama", return_value="Generated report"):
+        generate_insights(db, 3, org_id=9)
+    mock_risk.assert_called_once_with(db, 9)
+    mock_forecast.assert_called_once_with(db, 3, 9)

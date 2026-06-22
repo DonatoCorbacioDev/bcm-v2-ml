@@ -51,16 +51,18 @@ def _build_org_stats(contracts: list, contract_totals: dict) -> dict:
     return stats
 
 
-def compute_risk_scores(db: Session) -> list:
-    contracts = db.query(Contract).all()
+def compute_risk_scores(db: Session, org_id: int | None = None) -> list:
+    contracts_query = db.query(Contract)
+    if org_id is not None:
+        contracts_query = contracts_query.filter(Contract.organization_id == org_id)
+    contracts = contracts_query.all()
     if not contracts:
         return []
 
-    fv_rows = (
-        db.query(FinancialValue.contract_id, func.sum(FinancialValue.financial_amount).label("total"))
-        .group_by(FinancialValue.contract_id)
-        .all()
-    )
+    fv_query = db.query(FinancialValue.contract_id, func.sum(FinancialValue.financial_amount).label("total"))
+    if org_id is not None:
+        fv_query = fv_query.filter(FinancialValue.organization_id == org_id)
+    fv_rows = fv_query.group_by(FinancialValue.contract_id).all()
     contract_totals = {row.contract_id: float(row.total) for row in fv_rows}
     org_stats = _build_org_stats(contracts, contract_totals)
 

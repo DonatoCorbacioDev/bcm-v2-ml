@@ -15,6 +15,12 @@ def make_session(rows):
     return session
 
 
+def make_org_session(rows):
+    session = MagicMock()
+    session.query.return_value.filter.return_value.all.return_value = rows
+    return session
+
+
 def test_forecast_empty_db():
     result = compute_forecast(make_session([]), 3)
     assert result == {"historical": [], "forecast": []}
@@ -74,3 +80,18 @@ def test_forecast_negative_trend_clamps_to_zero():
     for f in result["forecast"]:
         assert f["amount"] >= 0.0
         assert f["lower"] >= 0.0
+
+
+def test_forecast_with_org_id_filters_query():
+    rows = [FVMock(2024, 1, 10000.0)]
+    session = make_org_session(rows)
+    result = compute_forecast(session, 3, org_id=7)
+    session.query.return_value.filter.assert_called_once()
+    assert len(result["historical"]) == 1
+
+
+def test_forecast_without_org_id_does_not_filter():
+    rows = [FVMock(2024, 1, 10000.0)]
+    session = make_session(rows)
+    compute_forecast(session, 3, org_id=None)
+    session.query.return_value.filter.assert_not_called()
