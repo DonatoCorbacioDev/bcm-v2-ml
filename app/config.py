@@ -7,6 +7,10 @@ class Settings(BaseSettings):
     DB_URL: str
     CORS_ORIGINS: str = "http://localhost:3000"
 
+    # "development" or "production". Used only to decide whether to warn at
+    # startup about an unset INTERNAL_API_KEY; does not gate any behavior.
+    ENVIRONMENT: str = "development"
+
     OLLAMA_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "llama3.2"
     OLLAMA_TIMEOUT: float = 120.0

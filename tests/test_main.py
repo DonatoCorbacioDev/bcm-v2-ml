@@ -1,8 +1,10 @@
+import asyncio
+import logging
 from unittest.mock import patch
 
 import httpx
 from fastapi.testclient import TestClient
-from app.main import app
+from app.main import app, lifespan
 from app.config import settings
 from app.database import get_db
 
@@ -137,3 +139,50 @@ def test_health_does_not_require_key():
         assert response.status_code == 200
     finally:
         settings.INTERNAL_API_KEY = original
+
+
+async def _run_lifespan():
+    async with lifespan(app):
+        pass
+
+
+def test_lifespan_warns_when_production_without_internal_api_key(caplog):
+    original_env = settings.ENVIRONMENT
+    original_key = settings.INTERNAL_API_KEY
+    settings.ENVIRONMENT = "production"
+    settings.INTERNAL_API_KEY = ""
+    try:
+        with caplog.at_level(logging.WARNING):
+            asyncio.run(_run_lifespan())
+        assert any("INTERNAL_API_KEY is unset" in r.message for r in caplog.records)
+    finally:
+        settings.ENVIRONMENT = original_env
+        settings.INTERNAL_API_KEY = original_key
+
+
+def test_lifespan_no_warning_when_internal_api_key_set(caplog):
+    original_env = settings.ENVIRONMENT
+    original_key = settings.INTERNAL_API_KEY
+    settings.ENVIRONMENT = "production"
+    settings.INTERNAL_API_KEY = "secret"
+    try:
+        with caplog.at_level(logging.WARNING):
+            asyncio.run(_run_lifespan())
+        assert not any("INTERNAL_API_KEY is unset" in r.message for r in caplog.records)
+    finally:
+        settings.ENVIRONMENT = original_env
+        settings.INTERNAL_API_KEY = original_key
+
+
+def test_lifespan_no_warning_in_development(caplog):
+    original_env = settings.ENVIRONMENT
+    original_key = settings.INTERNAL_API_KEY
+    settings.ENVIRONMENT = "development"
+    settings.INTERNAL_API_KEY = ""
+    try:
+        with caplog.at_level(logging.WARNING):
+            asyncio.run(_run_lifespan())
+        assert not any("INTERNAL_API_KEY is unset" in r.message for r in caplog.records)
+    finally:
+        settings.ENVIRONMENT = original_env
+        settings.INTERNAL_API_KEY = original_key
