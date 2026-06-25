@@ -19,6 +19,11 @@ dist/
 build/
 *.egg-info/
 
+# Test artifacts
+.coverage
+coverage.xml
+.pytest_cache/
+
 # IDE
 .idea/
 .vscode/
