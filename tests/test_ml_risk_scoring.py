@@ -106,9 +106,8 @@ class TestLoadModel:
 
     def test_loads_model_when_file_present(self, tmp_path):
         import joblib
-        dummy = MagicMock()
         model_file = tmp_path / "risk_model.joblib"
-        joblib.dump(dummy, model_file)
+        joblib.dump({"dummy": True}, model_file)
         with patch("app.services.ml_risk_scoring.MODEL_PATH", model_file):
             result = ml_risk_scoring._load_model()
         assert result is not None
