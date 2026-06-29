@@ -98,6 +98,9 @@ def compute_forecast(db: Session, months: int, org_id: int | None = None) -> dic
 
     safe_months = min(max(months, 1), 24)
     last_date = monthly["date"].iloc[-1]
+    # Prophet needs 12+ months to detect real yearly seasonality;
+    # below that it behaves like linear regression — flag it so callers can warn users.
+    reliable = len(monthly) >= 12
 
     if len(monthly) < 2:
         flat = _flat_forecast(float(monthly["amount"].iloc[-1]), safe_months)
@@ -105,7 +108,7 @@ def compute_forecast(db: Session, months: int, org_id: int | None = None) -> dic
             {"month": (last_date + pd.DateOffset(months=i)).strftime("%Y-%m"), **f}
             for i, f in enumerate(flat, start=1)
         ]
-        return {"historical": historical, "forecast": forecast}
+        return {"historical": historical, "forecast": forecast, "reliable": reliable}
 
     prophet_df = monthly.rename(columns={"date": "ds", "amount": "y"})[["ds", "y"]]
     try:
@@ -118,4 +121,4 @@ def compute_forecast(db: Session, months: int, org_id: int | None = None) -> dic
             for i, f in enumerate(flat, start=1)
         ]
 
-    return {"historical": historical, "forecast": forecast}
+    return {"historical": historical, "forecast": forecast, "reliable": reliable}

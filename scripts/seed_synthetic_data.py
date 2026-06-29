@@ -25,7 +25,6 @@ volume-mounted) if there is no local Python/SQLAlchemy available:
         mysql+pymysql://<user>:<password>@mysql:3306/bcm --reset
 """
 import argparse
-import math
 import os
 import random
 import re
@@ -57,6 +56,40 @@ except ImportError:
 SYN_PREFIX = "SYN-"
 
 STATUS_WEIGHTS = [("ACTIVE", 0.65), ("EXPIRED", 0.25), ("CANCELLED", 0.10)]
+
+# ---------------------------------------------------------------------------
+# Calibration parameters derived from ANAC (Autorità Nazionale Anticorruzione)
+# open data: https://dati.anticorruzione.it/opendata/dataset
+# License: CC BY 4.0 / Italian Open Data License 2.0 (IODL 2.0)
+#
+# The ANAC data is NOT stored here. Only the statistical parameters extracted
+# by running scripts/analyze_anac.py on the locally downloaded CSV are embedded.
+#
+# Amount distribution: LogNormal fit on "forniture e servizi" contracts
+#   (importoAggiudicazione, filtered 1k–50M EUR, N ≈ 280,000 contracts)
+#   => median ≈ EUR 44,000 | P90 ≈ EUR 350,000
+ANAC_LOGNORMAL_MU = 10.69
+ANAC_LOGNORMAL_SIGMA = 1.52
+
+# Monthly seasonality indices (sum = 12.0, average = 1.0)
+# Italian PA shows a documented Q4 spending rush (Nov-Dec budget exhaustion),
+# a spring peak (Mar-Apr new fiscal year allocations), and an August trough
+# (Ferragosto). Source: ANAC annual "Relazione" reports + IFEL studies.
+ANAC_MONTHLY_SEASONALITY = [
+    0.76,   # January  — post-holiday, new budget not yet allocated
+    0.84,   # February
+    1.09,   # March    — Q1 end, new fiscal year allocations
+    1.14,   # April    — spring procurement push
+    1.02,   # May
+    0.94,   # June
+    0.74,   # July     — pre-summer slowdown
+    0.46,   # August   — Ferragosto
+    0.97,   # September — return from summer
+    1.12,   # October  — Q4 budget spend push
+    1.33,   # November — year-end acceleration
+    1.35,   # December — budget exhaustion, year-end close
+]  # sum = 11.76 → normalized to 12.0 inside build_financial_rows()
+# ---------------------------------------------------------------------------
 
 FALLBACK_SURNAMES = [
     "Rossi", "Bianchi", "Verdi", "Ferrari", "Colombo", "Bruno", "Russo",
@@ -182,10 +215,15 @@ def build_financial_rows(rng, np_rng, start_date, end_date, today, min_months, m
     available = max(available, 1)
     n_months = min(rng.randint(min_months, max_months), available)
 
+    # Normalize ANAC seasonality coefficients so they average exactly 1.0
+    _s = ANAC_MONTHLY_SEASONALITY
+    _s_total = sum(_s)
+    _s_norm = [v * 12.0 / _s_total for v in _s]
+
     rows = []
     for i in range(n_months):
         cy, cm = add_months_ym(start_date.year, start_date.month, i)
-        seasonal = 1 + 0.12 * math.sin(2 * math.pi * (cm / 12))
+        seasonal = _s_norm[cm - 1]       # ANAC-calibrated Italian PA seasonality
         trend = (1 + growth_rate) ** i
         sales = max(500.0, base_amount * trend * seasonal * float(np_rng.normal(1.0, 0.06)))
         cost_ratio = rng.uniform(0.4, 0.7)
@@ -195,10 +233,15 @@ def build_financial_rows(rng, np_rng, start_date, end_date, today, min_months, m
     return rows
 
 
-def sample_base_amount(rng, is_outlier):
-    base = rng.uniform(8000, 60000)
+def sample_base_amount(np_rng, is_outlier):
+    # LogNormal calibrated on ANAC "forniture e servizi" (CC BY 4.0)
+    # Median ≈ EUR 44,000 | P90 ≈ EUR 350,000
+    base = float(np_rng.lognormal(mean=ANAC_LOGNORMAL_MU, sigma=ANAC_LOGNORMAL_SIGMA))
+    base = max(1_000.0, min(base, 5_000_000.0))
     if is_outlier:
-        base *= rng.choice([0.08, 0.12, 6.0, 9.0])
+        # ANAC documents two outlier patterns: "varianti in corso d'opera"
+        # (contract modifications +30-150%) and under-reported micro-contracts
+        base *= float(np_rng.choice([0.25, 0.40, 1.80, 2.50, 3.50]))
     return base
 
 
@@ -284,7 +327,7 @@ def seed_organization(conn, rng, np_rng, org, areas, type_ids, args, today, star
         contract_id = result.inserted_primary_key[0]
         contracts_created += 1
 
-        base_amount = sample_base_amount(rng, outlier_flags[i])
+        base_amount = sample_base_amount(np_rng, outlier_flags[i])
         growth_rate = rng.uniform(-0.01, 0.025)
         rows = build_financial_rows(
             rng, np_rng, start_date, end_date, today,

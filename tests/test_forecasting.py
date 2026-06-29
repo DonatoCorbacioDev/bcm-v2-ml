@@ -95,3 +95,21 @@ def test_forecast_without_org_id_does_not_filter():
     session = make_session(rows)
     compute_forecast(session, 3, org_id=None)
     session.query.return_value.filter.assert_not_called()
+
+
+def test_forecast_reliable_flag_false_when_fewer_than_12_months():
+    rows = [FVMock(2024, m, 10000.0) for m in range(1, 7)]  # 6 months
+    result = compute_forecast(make_session(rows), 3)
+    assert result["reliable"] is False
+
+
+def test_forecast_reliable_flag_true_when_12_or_more_months():
+    rows = [FVMock(2023, m, 10000.0) for m in range(1, 13)]  # 12 months
+    result = compute_forecast(make_session(rows), 3)
+    assert result["reliable"] is True
+
+
+def test_forecast_single_point_is_not_reliable():
+    rows = [FVMock(2024, 1, 10000.0)]
+    result = compute_forecast(make_session(rows), 3)
+    assert result["reliable"] is False
