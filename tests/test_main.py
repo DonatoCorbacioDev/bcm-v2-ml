@@ -174,6 +174,33 @@ def test_lifespan_no_warning_when_internal_api_key_set(caplog):
         settings.INTERNAL_API_KEY = original_key
 
 
+def test_anomalies_empty():
+    with patch("app.services.anomaly_detection.compute_anomalies", return_value=[]):
+        response = client.get("/anomalies")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_anomalies_returns_flagged_records():
+    fake = [{
+        "financialValueId": 1, "contractId": 2, "customerName": "Acme",
+        "month": 6, "year": 2025, "financialAmount": 999_999.0,
+        "anomalyScore": -0.5, "severity": "HIGH",
+    }]
+    with patch("app.services.anomaly_detection.compute_anomalies", return_value=fake):
+        response = client.get("/anomalies")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["severity"] == "HIGH"
+
+
+def test_anomalies_accepts_org_id():
+    with patch("app.services.anomaly_detection.compute_anomalies", return_value=[]):
+        response = client.get("/anomalies?org_id=3")
+    assert response.status_code == 200
+
+
 def test_lifespan_no_warning_in_development(caplog):
     original_env = settings.ENVIRONMENT
     original_key = settings.INTERNAL_API_KEY

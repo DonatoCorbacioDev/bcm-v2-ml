@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .routers import agent, forecast, risk_scores
+from .routers import agent, anomalies, forecast, risk_scores
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,7 @@ app.add_middleware(
 
 app.include_router(forecast.router)
 app.include_router(risk_scores.router)
+app.include_router(anomalies.router)
 app.include_router(agent.router)
 
 

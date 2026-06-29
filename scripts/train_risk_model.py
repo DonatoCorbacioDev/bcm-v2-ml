@@ -2,8 +2,8 @@
 Train and evaluate the ML risk scoring model.
 
 Reads data/synthetic_contracts.csv (generate it first with generate_training_data.py).
-Trains Logistic Regression and Random Forest, reports precision/recall/F1/ROC-AUC,
-and saves the best model to model/risk_model.joblib.
+Trains Logistic Regression, Random Forest and XGBoost, reports precision/recall/F1/ROC-AUC,
+and saves the best model (by test macro F1) to model/risk_model.joblib.
 
 Run:
     python scripts/generate_training_data.py
@@ -22,6 +22,7 @@ from sklearn.metrics import classification_report, f1_score, roc_auc_score
 from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from xgboost import XGBClassifier
 
 DATA_PATH = Path(__file__).parent.parent / "data" / "synthetic_contracts.csv"
 MODEL_DIR = Path(__file__).parent.parent / "model"
@@ -54,6 +55,13 @@ def _build_pipelines() -> dict:
             ("clf", RandomForestClassifier(
                 n_estimators=200, random_state=42,
                 class_weight="balanced", n_jobs=-1,
+            )),
+        ]),
+        "XGBoost": Pipeline([
+            ("scaler", StandardScaler()),
+            ("clf", XGBClassifier(
+                n_estimators=200, max_depth=6, learning_rate=0.1,
+                random_state=42, eval_metric="mlogloss", verbosity=0,
             )),
         ]),
     }
@@ -130,7 +138,7 @@ def main() -> None:
 
     MODEL_DIR.mkdir(exist_ok=True)
     joblib.dump(best["pipeline"], MODEL_PATH)
-    print(f"Model saved → {MODEL_PATH}")
+    print(f"Model saved -> {MODEL_PATH}")
 
     metadata = {
         "model_name": best_name,
@@ -153,7 +161,7 @@ def main() -> None:
     }
     with open(META_PATH, "w") as f:
         json.dump(metadata, f, indent=2)
-    print(f"Metadata saved → {META_PATH}")
+    print(f"Metadata saved -> {META_PATH}")
 
 
 if __name__ == "__main__":
