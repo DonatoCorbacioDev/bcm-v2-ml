@@ -213,3 +213,26 @@ def test_lifespan_no_warning_in_development(caplog):
     finally:
         settings.ENVIRONMENT = original_env
         settings.INTERNAL_API_KEY = original_key
+
+
+def test_risk_scores_merges_ml_scores_when_present():
+    fake_results = [{"contractId": 1, "customerName": "Acme", "riskScore": 0.5, "level": "MEDIUM", "anomalies": []}]
+    fake_ml = {1: {"mlScore": 0.9, "mlLevel": "HIGH"}}
+    with patch("app.routers.risk_scores.risk_scoring.compute_risk_scores", return_value=fake_results), \
+         patch("app.routers.risk_scores.ml_risk_scoring.compute_ml_risk_scores", return_value=fake_ml):
+        response = client.get("/risk-scores")
+    assert response.status_code == 200
+    data = response.json()
+    assert data[0]["mlScore"] == 0.9
+    assert data[0]["mlLevel"] == "HIGH"
+
+
+def test_risk_scores_skips_ml_merge_when_no_matching_contract():
+    fake_results = [{"contractId": 99, "customerName": "Test", "riskScore": 0.3, "level": "LOW", "anomalies": []}]
+    fake_ml = {1: {"mlScore": 0.9, "mlLevel": "HIGH"}}
+    with patch("app.routers.risk_scores.risk_scoring.compute_risk_scores", return_value=fake_results), \
+         patch("app.routers.risk_scores.ml_risk_scoring.compute_ml_risk_scores", return_value=fake_ml):
+        response = client.get("/risk-scores")
+    assert response.status_code == 200
+    data = response.json()
+    assert "mlScore" not in data[0]

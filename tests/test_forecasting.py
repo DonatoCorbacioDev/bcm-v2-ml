@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from app.services.forecasting import compute_forecast
 
 
@@ -113,3 +113,14 @@ def test_forecast_single_point_is_not_reliable():
     rows = [FVMock(2024, 1, 10000.0)]
     result = compute_forecast(make_session(rows), 3)
     assert result["reliable"] is False
+
+
+def test_forecast_prophet_exception_falls_back_to_flat():
+    rows = [FVMock(2024, m, 10000.0) for m in range(1, 4)]
+    with patch("app.services.forecasting._prophet_forecast", side_effect=RuntimeError("Stan error")):
+        result = compute_forecast(make_session(rows), 2)
+    assert len(result["forecast"]) == 2
+    for f in result["forecast"]:
+        assert f["amount"] >= 0.0
+        assert "lower" in f
+        assert "upper" in f
