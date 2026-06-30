@@ -146,15 +146,15 @@ async def _run_lifespan():
         pass
 
 
-def test_lifespan_warns_when_production_without_internal_api_key(caplog):
+def test_lifespan_raises_when_production_without_internal_api_key():
     original_env = settings.ENVIRONMENT
     original_key = settings.INTERNAL_API_KEY
     settings.ENVIRONMENT = "production"
     settings.INTERNAL_API_KEY = ""
     try:
-        with caplog.at_level(logging.WARNING):
+        import pytest
+        with pytest.raises(RuntimeError, match="INTERNAL_API_KEY is unset"):
             asyncio.run(_run_lifespan())
-        assert any("INTERNAL_API_KEY is unset" in r.message for r in caplog.records)
     finally:
         settings.ENVIRONMENT = original_env
         settings.INTERNAL_API_KEY = original_key

@@ -30,7 +30,7 @@ N_ORGS = 20
 
 def _assign_labels(days: np.ndarray, status: np.ndarray, z: np.ndarray) -> np.ndarray:
     labels = np.zeros(len(days), dtype=int)
-    medium = (days < 90) | (np.abs(z) > 1.5)
+    medium = (days < 180) | (np.abs(z) > 1.0)
     high = (status == 1) | (days < 30) | (np.abs(z) > 2.5)
     labels[medium] = 1
     labels[high] = 2
