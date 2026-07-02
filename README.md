@@ -100,6 +100,11 @@ results, it does not replace them. No data leaves the server.
 If Ollama is unreachable, the endpoint still returns `200` with the raw
 `riskScores`/`forecast` data, `report: null` and an `error` message.
 
+See [docs/demo/agent_insights_example.md](./docs/demo/agent_insights_example.md)
+for a real, unedited captured run against the synthetic dataset — including
+the exact risk-score math for the highlighted contract and an honest take
+on report quality.
+
 ```json
 {
   "riskScores": [ ... ],

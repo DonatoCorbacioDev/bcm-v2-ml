@@ -106,6 +106,31 @@ model to reproduce, and the one most sensitive to the 5% label noise.
   means "statistically unusual for this org," not "verified as an error or
   fraud."
 
+## 4. Natural-language report (`GET /agent/insights`)
+
+- **Model:** a local [Ollama](https://ollama.com) model (`llama3.2` by
+  default, configurable via `OLLAMA_MODEL`) — small enough to run on
+  consumer hardware with no external API key or per-request cost, which
+  matters for a self-hosted tool. No contract data leaves the server.
+- **What it does and does not influence:** the endpoint calls sections 1
+  and 2 above (`compute_forecast`, `compute_risk_scores`) first and passes
+  their *already-computed* output into the prompt. The model only writes a
+  narrative summary of numbers it's given — it does not re-derive risk
+  scores or forecasts, and cannot change them. If Ollama is unreachable, the
+  endpoint still returns `200` with the raw `riskScores`/`forecast` and
+  `report: null` — a report-generation failure never hides the underlying
+  data.
+- **Quality, honestly:** with the default small model, output is coherent
+  and grounded in the numbers it receives (no invented figures observed),
+  but noticeably repetitive across list items and occasionally rough in
+  Italian phrasing. See
+  [docs/demo/agent_insights_example.md](./docs/demo/agent_insights_example.md)
+  for a real, unedited captured example — not cherry-picked for quality.
+  This is the weakest-tested component of the service: there is no
+  automated evaluation of report quality (only that Ollama calls are mocked
+  in the test suite, see [README.md](./README.md#testing)), so regressions
+  in phrasing/coherence would not be caught by CI.
+
 ## Training data — honesty check
 
 The risk-scoring classifier (2.2) is trained on **synthetic data whose
