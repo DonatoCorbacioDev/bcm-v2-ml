@@ -4,6 +4,9 @@ FastAPI ML service for the BCM (Business Contracts Manager) platform. It connect
 read-only to the shared MySQL database and exposes statistical/AI endpoints used
 by the Spring Boot backend and the Next.js frontend.
 
+For methodology, performance metrics, training data, and limitations of every
+model this service uses, see [MODEL_CARD.md](./MODEL_CARD.md).
+
 ## Architecture
 
 BCM is composed of 4 repositories:
@@ -18,9 +21,17 @@ BCM is composed of 4 repositories:
 This service is **read-only** on the `contracts` and `financial_values` tables.
 It never writes to the database.
 
-- The frontend calls this service directly from the browser (CORS enabled).
-- The backend calls `GET /risk-scores` daily (`RiskScoreRefresher`) to generate
-  high-risk notifications.
+- The frontend never calls this service directly. It calls the Spring Boot
+  backend (`/forecast`, `/risk-scores`, `/anomalies` on `MlProxyController`),
+  which proxies to this service — so every request is authenticated and
+  tenant-scoped (`org_id` is derived from the JWT, not user input), and
+  responses are cached (`MlCacheService`/`MlCacheRefresher`) instead of
+  hitting FastAPI on every page load.
+- The backend also calls `GET /risk-scores` daily (`RiskScoreRefresher`) to
+  generate high-risk notifications, and `GET /forecast`/`GET /anomalies`
+  nightly (`MlCacheRefresher`) to warm the cache.
+- `GET /agent/insights` is not yet wired into the backend or frontend; it is
+  reachable directly on this service for now.
 
 ## Endpoints
 
@@ -32,20 +43,27 @@ Liveness check used by the Docker healthcheck.
 ```
 
 ### `GET /forecast?months=3`
-Aggregates `financial_values` by month/year, fits a linear regression and
-returns a forecast with a 95% confidence interval. `months` must be between
-1 and 24 (default 3).
+Aggregates `financial_values` by month/year and fits [Prophet](https://facebook.github.io/prophet/)
+(trend + yearly seasonality) to return a forecast with a 95% confidence
+interval. `months` must be between 1 and 24 (default 3). Falls back to a flat
+forecast when there isn't enough history for Prophet to fit. See
+[MODEL_CARD.md](./MODEL_CARD.md#1-financial-forecasting-get-forecast) for
+details, including the `reliable` flag.
 
 ```json
 {
   "historical": [{ "month": "2024-01", "amount": 12000.0 }],
-  "forecast": [{ "month": "2024-02", "amount": 12500.0, "lower": 11800.0, "upper": 13200.0 }]
+  "forecast": [{ "month": "2024-02", "amount": 12500.0, "lower": 11800.0, "upper": 13200.0 }],
+  "reliable": true
 }
 ```
 
 ### `GET /risk-scores`
-Rule-based risk score per contract, combining contract expiry and a financial
-z-score per organization.
+Rule-based risk score per contract (expiry + financial z-score per
+organization), optionally supplemented with an ML-predicted score
+(`mlScore`/`mlLevel`) from a trained classifier when `model/risk_model.joblib`
+is present. See [MODEL_CARD.md](./MODEL_CARD.md#2-contract-risk-scoring-get-risk-scores)
+for the full methodology, features, and measured performance.
 
 - `expiry_score`: expired = 1.0, < 30 days = 0.8, < 90 days = 0.5, < 180 days =
   0.3, otherwise = 0.1 (no end date = 0.3)
@@ -55,7 +73,20 @@ z-score per organization.
 
 ```json
 [
-  { "contractId": 1, "customerName": "Acme", "riskScore": 0.82, "level": "HIGH", "anomalies": ["EXPIRED"] }
+  { "contractId": 1, "customerName": "Acme", "riskScore": 0.82, "level": "HIGH", "anomalies": ["EXPIRED"], "mlScore": 0.91, "mlLevel": "HIGH" }
+]
+```
+
+### `GET /anomalies`
+Flags financial records that are statistically unusual for their
+organization using an Isolation Forest (amount + cyclical month encoding).
+Returns an empty list when the organization has fewer than 5 financial
+records. See [MODEL_CARD.md](./MODEL_CARD.md#3-anomaly-detection-get-anomalies)
+for details.
+
+```json
+[
+  { "financialValueId": 42, "contractId": 1, "customerName": "Acme", "month": 6, "year": 2024, "financialAmount": 98000.0, "anomalyScore": -0.31, "severity": "HIGH" }
 ]
 ```
 
