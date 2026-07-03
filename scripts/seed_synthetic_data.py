@@ -102,8 +102,8 @@ FALLBACK_NOUNS = [
 FALLBACK_SUFFIXES = ["S.r.l.", "S.p.A.", "S.n.c.", "S.a.s."]
 
 PROJECT_WORDS = [
-    "Revamp", "Expansion", "Digitalizzazione", "Manutenzione", "Integrazione",
-    "Sviluppo", "Ottimizzazione", "Migrazione", "Consolidamento", "Roadmap",
+    "Fornitura", "Realizzazione", "Digitalizzazione", "Manutenzione", "Integrazione",
+    "Sviluppo", "Ottimizzazione", "Ristrutturazione", "Adeguamento", "Rinnovo",
 ]
 
 metadata = MetaData()
