@@ -2,7 +2,9 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 
-from app.services.clause_risk import MAX_TEXT_CHARS, _build_prompt, _call_ollama, analyze_clauses
+from app.services.clause_risk import (
+    MAX_TEXT_CHARS, _build_prompt, _call_ollama, _is_grounded, analyze_clauses,
+)
 
 
 # ── _build_prompt ────────────────────────────────────────────────────────────
@@ -53,6 +55,7 @@ def test_analyze_clauses_blank_text():
 
 
 def test_analyze_clauses_success():
+    source_text = "Some contract text that renews automatically each year."
     fake_clauses = [
         {"category": "auto-renewal", "excerpt": "renews automatically", "riskLevel": "HIGH", "reasoning": "..."}
     ]
@@ -60,7 +63,7 @@ def test_analyze_clauses_success():
         "app.services.clause_risk._call_ollama",
         return_value='{"clauses": ' + str(fake_clauses).replace("'", '"') + "}",
     ):
-        result = analyze_clauses("Some contract text")
+        result = analyze_clauses(source_text)
     assert result["error"] is None
     assert result["clauses"] == fake_clauses
 
@@ -87,6 +90,7 @@ def test_analyze_clauses_missing_clauses_key():
 
 
 def test_analyze_clauses_drops_entries_with_empty_excerpt():
+    source_text = "Some contract text that renews automatically each year."
     raw_clauses = [
         {"category": "auto-renewal", "excerpt": "renews automatically", "riskLevel": "HIGH", "reasoning": "..."},
         {"category": "indemnification", "excerpt": "", "riskLevel": "", "reasoning": ""},
@@ -95,10 +99,53 @@ def test_analyze_clauses_drops_entries_with_empty_excerpt():
         "app.services.clause_risk._call_ollama",
         return_value='{"clauses": ' + str(raw_clauses).replace("'", '"') + "}",
     ):
-        result = analyze_clauses("Some contract text")
+        result = analyze_clauses(source_text)
     assert result["error"] is None
     assert len(result["clauses"]) == 1
     assert result["clauses"][0]["category"] == "auto-renewal"
+
+
+def test_analyze_clauses_drops_fabricated_excerpt_not_in_source():
+    source_text = "Some contract text that renews automatically each year."
+    raw_clauses = [
+        {"category": "auto-renewal", "excerpt": "renews automatically", "riskLevel": "HIGH", "reasoning": "..."},
+        {"category": "penalty", "excerpt": "a clause the model invented", "riskLevel": "HIGH", "reasoning": "..."},
+    ]
+    with patch(
+        "app.services.clause_risk._call_ollama",
+        return_value='{"clauses": ' + str(raw_clauses).replace("'", '"') + "}",
+    ):
+        result = analyze_clauses(source_text)
+    assert result["error"] is None
+    assert len(result["clauses"]) == 1
+    assert result["clauses"][0]["category"] == "auto-renewal"
+
+
+def test_analyze_clauses_keeps_excerpt_with_different_whitespace():
+    source_text = "Some contract text that\nrenews    automatically each year."
+    raw_clauses = [
+        {"category": "auto-renewal", "excerpt": "renews automatically", "riskLevel": "HIGH", "reasoning": "..."},
+    ]
+    with patch(
+        "app.services.clause_risk._call_ollama",
+        return_value='{"clauses": ' + str(raw_clauses).replace("'", '"') + "}",
+    ):
+        result = analyze_clauses(source_text)
+    assert len(result["clauses"]) == 1
+
+
+# ── _is_grounded ─────────────────────────────────────────────────────────────
+
+def test_is_grounded_true_for_exact_substring():
+    assert _is_grounded("hello world", "say hello world today")
+
+
+def test_is_grounded_false_when_not_present():
+    assert not _is_grounded("hello world", "completely different text")
+
+
+def test_is_grounded_normalizes_whitespace():
+    assert _is_grounded("hello   world", "say hello\nworld today")
 
 
 def test_analyze_clauses_truncates_long_text():

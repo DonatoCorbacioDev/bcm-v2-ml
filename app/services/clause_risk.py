@@ -1,4 +1,5 @@
 import json
+import re
 
 import httpx
 
@@ -35,6 +36,14 @@ def _build_prompt(text: str, language: str) -> str:
     return _PROMPT_TEMPLATE.format(language=language, text=text, categories=_CATEGORIES_IT)
 
 
+def _normalize_whitespace(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _is_grounded(excerpt: str, source_text: str) -> bool:
+    return _normalize_whitespace(excerpt) in _normalize_whitespace(source_text)
+
+
 def _call_ollama(prompt: str) -> str:
     response = httpx.post(
         f"{settings.OLLAMA_URL}/api/generate",
@@ -69,8 +78,13 @@ def analyze_clauses(text: str) -> dict:
         return {"clauses": [], "error": "Could not parse the AI response."}
 
     # The model occasionally emits a placeholder entry for a category it
-    # considered but found no matching text for (empty excerpt/reasoning).
-    # Those aren't actionable findings, so drop them here.
-    clauses = [c for c in clauses if isinstance(c, dict) and c.get("excerpt")]
+    # considered but found no matching text for (empty excerpt/reasoning), or
+    # fabricates a plausible-sounding excerpt that isn't actually in the
+    # source text (more likely on short/sparse OCR'd input). Neither is an
+    # actionable, trustworthy finding, so drop both here.
+    clauses = [
+        c for c in clauses
+        if isinstance(c, dict) and c.get("excerpt") and _is_grounded(c["excerpt"], truncated)
+    ]
 
     return {"clauses": clauses, "error": None}
