@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .routers import agent, anomalies, forecast, risk_scores
+from .routers import agent, anomalies, clause_risk, forecast, risk_scores
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,7 @@ app.include_router(forecast.router)
 app.include_router(risk_scores.router)
 app.include_router(anomalies.router)
 app.include_router(agent.router)
+app.include_router(clause_risk.router)
 
 
 @app.get("/health")

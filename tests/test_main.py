@@ -227,6 +227,19 @@ def test_risk_scores_merges_ml_scores_when_present():
     assert data[0]["mlLevel"] == "HIGH"
 
 
+def test_clause_risk_analysis_success():
+    fake_result = {"clauses": [{"category": "auto-renewal", "excerpt": "...", "riskLevel": "HIGH", "reasoning": "..."}], "error": None}
+    with patch("app.routers.clause_risk.clause_risk.analyze_clauses", return_value=fake_result):
+        response = client.post("/clause-risk-analysis", json={"text": "Some contract text"})
+    assert response.status_code == 200
+    assert response.json() == fake_result
+
+
+def test_clause_risk_analysis_requires_text_field():
+    response = client.post("/clause-risk-analysis", json={})
+    assert response.status_code == 422
+
+
 def test_risk_scores_skips_ml_merge_when_no_matching_contract():
     fake_results = [{"contractId": 99, "customerName": "Test", "riskScore": 0.3, "level": "LOW", "anomalies": []}]
     fake_ml = {1: {"mlScore": 0.9, "mlLevel": "HIGH"}}
