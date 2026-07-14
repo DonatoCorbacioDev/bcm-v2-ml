@@ -6,25 +6,33 @@ from ..config import settings
 
 MAX_TEXT_CHARS = 8000
 
+_CATEGORIES_IT = (
+    "Rinnovo automatico, Recesso unilaterale, Penali o danni liquidati, "
+    "Limitazione di responsabilità, Esclusiva, Non concorrenza, "
+    "Foro competente o legge applicabile, Manleva, Adeguamento prezzi"
+)
+
 _PROMPT_TEMPLATE = (
-    "You are a contract review assistant for a contract management system. "
-    "Write every text field in your response in {language}.\n\n"
+    "You are a contract review assistant for a contract management system.\n\n"
     "Read the following contract text and identify clauses that carry legal or "
-    "financial risk for the party relying on this system, focusing on categories "
-    "such as: automatic renewal, unilateral termination, penalties or liquidated "
-    "damages, liability limitation or cap, exclusivity, non-compete, jurisdiction "
-    "or governing law, indemnification, and price escalation.\n\n"
+    "financial risk for the party relying on this system. Look for clauses "
+    "matching these categories: {categories}.\n\n"
     "Contract text:\n"
     "{text}\n\n"
     "Respond with ONLY a JSON object in this exact shape, no other text:\n"
     '{{"clauses": [{{"category": string, "excerpt": string, "riskLevel": '
     '"HIGH"|"MEDIUM"|"LOW", "reasoning": string}}]}}\n'
-    "If no risky clauses are found, respond with {{\"clauses\": []}}."
+    "If no risky clauses are found, respond with {{\"clauses\": []}}.\n\n"
+    'IMPORTANT: the "category" value must be exactly one of the category '
+    "names given above, in {language}, never translated to English. The "
+    '"reasoning" value must also be written in {language}. The "excerpt" '
+    "value must be copied verbatim from the contract text above, in its "
+    "original language."
 )
 
 
 def _build_prompt(text: str, language: str) -> str:
-    return _PROMPT_TEMPLATE.format(language=language, text=text)
+    return _PROMPT_TEMPLATE.format(language=language, text=text, categories=_CATEGORIES_IT)
 
 
 def _call_ollama(prompt: str) -> str:
@@ -59,5 +67,10 @@ def analyze_clauses(text: str) -> dict:
         clauses = parsed["clauses"]
     except (json.JSONDecodeError, KeyError, TypeError):
         return {"clauses": [], "error": "Could not parse the AI response."}
+
+    # The model occasionally emits a placeholder entry for a category it
+    # considered but found no matching text for (empty excerpt/reasoning).
+    # Those aren't actionable findings, so drop them here.
+    clauses = [c for c in clauses if isinstance(c, dict) and c.get("excerpt")]
 
     return {"clauses": clauses, "error": None}

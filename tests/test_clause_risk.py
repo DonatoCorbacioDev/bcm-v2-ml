@@ -86,6 +86,21 @@ def test_analyze_clauses_missing_clauses_key():
     assert result["error"] == "Could not parse the AI response."
 
 
+def test_analyze_clauses_drops_entries_with_empty_excerpt():
+    raw_clauses = [
+        {"category": "auto-renewal", "excerpt": "renews automatically", "riskLevel": "HIGH", "reasoning": "..."},
+        {"category": "indemnification", "excerpt": "", "riskLevel": "", "reasoning": ""},
+    ]
+    with patch(
+        "app.services.clause_risk._call_ollama",
+        return_value='{"clauses": ' + str(raw_clauses).replace("'", '"') + "}",
+    ):
+        result = analyze_clauses("Some contract text")
+    assert result["error"] is None
+    assert len(result["clauses"]) == 1
+    assert result["clauses"][0]["category"] == "auto-renewal"
+
+
 def test_analyze_clauses_truncates_long_text():
     long_text = "a" * (MAX_TEXT_CHARS * 2)
     with patch("app.services.clause_risk._call_ollama", return_value='{"clauses": []}') as mock_call:
