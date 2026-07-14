@@ -153,8 +153,9 @@ def test_lifespan_raises_when_production_without_internal_api_key():
     settings.INTERNAL_API_KEY = ""
     try:
         import pytest
+        coro = _run_lifespan()
         with pytest.raises(RuntimeError, match="INTERNAL_API_KEY is unset"):
-            asyncio.run(_run_lifespan())
+            asyncio.run(coro)
     finally:
         settings.ENVIRONMENT = original_env
         settings.INTERNAL_API_KEY = original_key
