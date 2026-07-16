@@ -92,7 +92,7 @@ ANAC_MONTHLY_SEASONALITY = [
 # ---------------------------------------------------------------------------
 
 FALLBACK_SURNAMES = [
-    "Rossi", "Bianchi", "Verdi", "Ferrari", "Colombo", "Bruno", "Russo",
+    "Rossi", "Bianchi", "Verdi", "Ricci", "Colombo", "Bruno", "Russo",
     "Fontana", "Costa", "Moretti", "Galli", "Conti", "Marini", "Rinaldi", "Greco",
 ]
 FALLBACK_NOUNS = [
@@ -228,8 +228,8 @@ def build_financial_rows(rng, np_rng, start_date, end_date, today, min_months, m
         sales = max(500.0, base_amount * trend * seasonal * float(np_rng.normal(1.0, 0.06)))
         cost_ratio = rng.uniform(0.4, 0.7)
         costs = max(200.0, sales * cost_ratio * float(np_rng.normal(1.0, 0.05)))
-        rows.append({"month_value": cm, "year_value": cy, "financial_amount": round(sales, 2), "financial_type_id": type_ids["SALES"]})
-        rows.append({"month_value": cm, "year_value": cy, "financial_amount": round(costs, 2), "financial_type_id": type_ids["COSTS"]})
+        rows.append({"month_value": cm, "year_value": cy, "financial_amount": round(sales, 2), "financial_type_id": type_ids["Ricavi"]})
+        rows.append({"month_value": cm, "year_value": cy, "financial_amount": round(costs, 2), "financial_type_id": type_ids["Costi"]})
     return rows
 
 
@@ -292,7 +292,7 @@ def reset_org_synthetic_data(conn, org_id):
 
 
 def seed_organization(conn, rng, np_rng, org, areas, type_ids, args, today, start_seq):
-    type_ids_ok = "SALES" in type_ids and "COSTS" in type_ids
+    type_ids_ok = "Ricavi" in type_ids and "Costi" in type_ids
     if not areas or not type_ids_ok:
         print(f"  [SKIP] org '{org['name']}' (id={org['id']}): missing business_areas or SALES/COSTS financial_types")
         return 0, 0
