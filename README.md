@@ -7,16 +7,21 @@ by the Spring Boot backend and the Next.js frontend.
 For methodology, performance metrics, training data, and limitations of every
 model this service uses, see [MODEL_CARD.md](./MODEL_CARD.md).
 
+This service has no UI of its own — see the
+[bcm-v2-frontend](https://github.com/DonatoCorbacioDev/bcm-v2-frontend#-screenshots)
+README for screenshots of the risk scores, forecasts, and anomalies it produces
+rendered in the dashboard.
+
 ## Architecture
 
 BCM is composed of 4 repositories:
 
 | Repo             | Stack                          | Port |
 |------------------|---------------------------------|------|
-| bcm-v2-backend   | Spring Boot, MySQL, JWT          | 8090 |
-| bcm-v2-frontend  | Next.js, TypeScript, TanStack Query | 3000 |
+| [bcm-v2-backend](https://github.com/DonatoCorbacioDev/bcm-v2-backend)   | Spring Boot, MySQL, JWT          | 8090 |
+| [bcm-v2-frontend](https://github.com/DonatoCorbacioDev/bcm-v2-frontend)  | Next.js, TypeScript, TanStack Query | 3000 |
 | **bcm-v2-ml**    | FastAPI, SQLAlchemy, pandas/numpy | 8000 |
-| bcm-v2-docker    | docker-compose for all services  | -    |
+| [bcm-v2-docker](https://github.com/DonatoCorbacioDev/bcm-v2-docker)    | docker-compose for all services  | -    |
 
 This service is **read-only** on the `contracts` and `financial_values` tables.
 It never writes to the database.
