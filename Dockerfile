@@ -1,3 +1,8 @@
+# Do not bump to 3.14 without re-checking wheel availability: numpy==1.26.4
+# has no prebuilt wheel for 3.14 yet, and python:3.14-slim has no C compiler
+# (no cc/gcc/clang), so pip's source-build fallback fails outright
+# (meson.build: "Unknown compiler(s)"). Confirmed by actually building the
+# image, not inferred from a changelog.
 FROM python:3.11-slim
 
 WORKDIR /app
