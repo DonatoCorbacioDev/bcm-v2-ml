@@ -3,7 +3,7 @@
 # (no cc/gcc/clang), so pip's source-build fallback fails outright
 # (meson.build: "Unknown compiler(s)"). Confirmed by actually building the
 # image, not inferred from a changelog.
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 WORKDIR /app
 
