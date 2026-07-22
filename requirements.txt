@@ -1,6 +1,6 @@
 fastapi==0.111.0
 uvicorn[standard]==0.30.1
-sqlalchemy==2.0.31
+sqlalchemy==2.0.51
 pymysql==1.1.0
 cryptography==42.0.8
 pandas==2.2.2
