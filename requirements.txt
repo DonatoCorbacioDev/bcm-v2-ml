@@ -4,7 +4,7 @@ sqlalchemy==2.0.51
 pymysql==1.1.0
 cryptography==49.0.0
 pandas==3.0.3
-numpy==1.26.4
+numpy==2.5.1
 scikit-learn==1.5.2
 # >=3.3.0 has no build for Python 3.11 (this project's runtime); 3.2.0 is the
 # highest available. Confirmed by installing inside python:3.11-slim.
