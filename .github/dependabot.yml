@@ -28,3 +28,11 @@ updates:
     labels:
       - "dependencies"
       - "docker"
+    ignore:
+      # Confirmed 3.14 fails: numpy==1.26.4 has no prebuilt wheel for it and
+      # python:3.14-slim has no C compiler to build it from source (see the
+      # comment on the FROM line in Dockerfile). Only 3.14 was tested — not
+      # blocking 3.12/3.13, which may well be fine; narrow this if a bump to
+      # one of those specifically gets proposed and verified.
+      - dependency-name: "python"
+        versions: [">=3.14"]
