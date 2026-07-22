@@ -10,6 +10,13 @@ updates:
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
+    ignore:
+      # xgboost has no build available for Python 3.11 (this project's
+      # runtime, see Dockerfile) past 3.2.0 — confirmed by actually
+      # installing inside a python:3.11-slim container, not inferred.
+      # Revisit once this project bumps its own Python version.
+      - dependency-name: "xgboost"
+        versions: [">=3.3.0"]
 
   # GitHub Actions used in the workflows under .github/workflows/
   - package-ecosystem: "github-actions"
