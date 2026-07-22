@@ -2,7 +2,7 @@ fastapi==0.111.0
 uvicorn[standard]==0.51.0
 sqlalchemy==2.0.51
 pymysql==1.1.0
-cryptography==42.0.8
+cryptography==49.0.0
 pandas==2.2.2
 numpy==1.26.4
 scikit-learn==1.5.2
