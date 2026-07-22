@@ -9,6 +9,6 @@ scikit-learn==1.5.2
 xgboost>=2.0.0
 prophet>=1.1.5
 joblib==1.5.3
-pydantic-settings==2.3.4
+pydantic-settings==2.14.2
 httpx==0.27.0
 gunicorn==22.0.0
