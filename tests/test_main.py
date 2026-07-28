@@ -3,6 +3,7 @@ import logging
 from unittest.mock import patch
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 from app.main import app, lifespan
 from app.config import settings
@@ -111,34 +112,22 @@ def test_forecast_accepts_org_id():
     assert response.status_code == 200
 
 
-def test_protected_endpoint_rejects_request_without_key_when_configured():
-    original = settings.INTERNAL_API_KEY
-    settings.INTERNAL_API_KEY = "secret"
-    try:
-        response = client.get("/risk-scores")
-        assert response.status_code == 401
-    finally:
-        settings.INTERNAL_API_KEY = original
+def test_protected_endpoint_rejects_request_without_key_when_configured(monkeypatch):
+    monkeypatch.setattr(settings, "INTERNAL_API_KEY", "secret")
+    response = client.get("/risk-scores")
+    assert response.status_code == 401
 
 
-def test_protected_endpoint_accepts_request_with_correct_key():
-    original = settings.INTERNAL_API_KEY
-    settings.INTERNAL_API_KEY = "secret"
-    try:
-        response = client.get("/risk-scores", headers={"X-Internal-Api-Key": "secret"})
-        assert response.status_code == 200
-    finally:
-        settings.INTERNAL_API_KEY = original
+def test_protected_endpoint_accepts_request_with_correct_key(monkeypatch):
+    monkeypatch.setattr(settings, "INTERNAL_API_KEY", "secret")
+    response = client.get("/risk-scores", headers={"X-Internal-Api-Key": "secret"})
+    assert response.status_code == 200
 
 
-def test_health_does_not_require_key():
-    original = settings.INTERNAL_API_KEY
-    settings.INTERNAL_API_KEY = "secret"
-    try:
-        response = client.get("/health")
-        assert response.status_code == 200
-    finally:
-        settings.INTERNAL_API_KEY = original
+def test_health_does_not_require_key(monkeypatch):
+    monkeypatch.setattr(settings, "INTERNAL_API_KEY", "secret")
+    response = client.get("/health")
+    assert response.status_code == 200
 
 
 async def _run_lifespan():
@@ -146,33 +135,20 @@ async def _run_lifespan():
         pass
 
 
-def test_lifespan_raises_when_production_without_internal_api_key():
-    original_env = settings.ENVIRONMENT
-    original_key = settings.INTERNAL_API_KEY
-    settings.ENVIRONMENT = "production"
-    settings.INTERNAL_API_KEY = ""
-    try:
-        import pytest
-        coro = _run_lifespan()
-        with pytest.raises(RuntimeError, match="INTERNAL_API_KEY is unset"):
-            asyncio.run(coro)
-    finally:
-        settings.ENVIRONMENT = original_env
-        settings.INTERNAL_API_KEY = original_key
+def test_lifespan_raises_when_production_without_internal_api_key(monkeypatch):
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "INTERNAL_API_KEY", "")
+    coro = _run_lifespan()
+    with pytest.raises(RuntimeError, match="INTERNAL_API_KEY is unset"):
+        asyncio.run(coro)
 
 
-def test_lifespan_no_warning_when_internal_api_key_set(caplog):
-    original_env = settings.ENVIRONMENT
-    original_key = settings.INTERNAL_API_KEY
-    settings.ENVIRONMENT = "production"
-    settings.INTERNAL_API_KEY = "secret"
-    try:
-        with caplog.at_level(logging.WARNING):
-            asyncio.run(_run_lifespan())
-        assert not any("INTERNAL_API_KEY is unset" in r.message for r in caplog.records)
-    finally:
-        settings.ENVIRONMENT = original_env
-        settings.INTERNAL_API_KEY = original_key
+def test_lifespan_no_warning_when_internal_api_key_set(monkeypatch, caplog):
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "INTERNAL_API_KEY", "secret")
+    with caplog.at_level(logging.WARNING):
+        asyncio.run(_run_lifespan())
+    assert not any("INTERNAL_API_KEY is unset" in r.message for r in caplog.records)
 
 
 def test_anomalies_empty():
@@ -202,18 +178,12 @@ def test_anomalies_accepts_org_id():
     assert response.status_code == 200
 
 
-def test_lifespan_no_warning_in_development(caplog):
-    original_env = settings.ENVIRONMENT
-    original_key = settings.INTERNAL_API_KEY
-    settings.ENVIRONMENT = "development"
-    settings.INTERNAL_API_KEY = ""
-    try:
-        with caplog.at_level(logging.WARNING):
-            asyncio.run(_run_lifespan())
-        assert not any("INTERNAL_API_KEY is unset" in r.message for r in caplog.records)
-    finally:
-        settings.ENVIRONMENT = original_env
-        settings.INTERNAL_API_KEY = original_key
+def test_lifespan_no_warning_in_development(monkeypatch, caplog):
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+    monkeypatch.setattr(settings, "INTERNAL_API_KEY", "")
+    with caplog.at_level(logging.WARNING):
+        asyncio.run(_run_lifespan())
+    assert not any("INTERNAL_API_KEY is unset" in r.message for r in caplog.records)
 
 
 def test_risk_scores_merges_ml_scores_when_present():
