@@ -3,9 +3,11 @@
 values, so /forecast and /risk-scores have realistic data to work with.
 
 Standalone offline tool: not imported by app/, not run by the test suite.
-Writes only to `contracts` and `financial_values`; reads `organizations`,
+Writes to `contracts`, `financial_values` and `budgets`; reads `organizations`,
 `business_areas` and `financial_types` for foreign keys and never touches
-`users`, `managers`, `roles`, `audit_logs`, `notifications`, `refresh_tokens`.
+`users`, `managers`, `roles`, `audit_logs`, `notifications`, `refresh_tokens`
+UNLESS run with --manager-id (assigns existing contracts to that manager id,
+does not create/modify the manager or user row itself).
 
 Requires a DB connection string with write access, passed via --db-url or the
 DB_URL environment variable (the app's own DB_URL is documented as read-only
@@ -23,6 +25,14 @@ volume-mounted) if there is no local Python/SQLAlchemy available:
     docker exec bcm-ml pip install Faker==40.23.0
     docker exec bcm-ml python scripts/seed_synthetic_data.py --db-url \
         mysql+pymysql://<user>:<password>@mysql:3306/bcm --reset
+
+Single dedicated demo organization (public demo login, safe to fully wipe
+and reseed on a schedule - --wipe-org deletes ALL contracts/financial_values/
+budgets for --org-id, not just SYN-* rows, so it also undoes whatever a demo
+visitor created or deleted through the app itself):
+    docker exec bcm-ml python scripts/seed_synthetic_data.py --db-url \
+        mysql+pymysql://<user>:<password>@mysql:3306/bcm \
+        --org-id 7 --manager-id 12 --wipe-org --yes
 """
 import argparse
 import os
@@ -55,7 +65,7 @@ except ImportError:
 
 SYN_PREFIX = "SYN-"
 
-STATUS_WEIGHTS = [("ACTIVE", 0.65), ("EXPIRED", 0.25), ("CANCELLED", 0.10)]
+STATUS_WEIGHTS = [("ACTIVE", 0.60), ("EXPIRED", 0.22), ("CANCELLED", 0.08), ("DRAFT", 0.10)]
 
 # ---------------------------------------------------------------------------
 # Calibration parameters derived from ANAC (Autorità Nazionale Anticorruzione)
@@ -121,6 +131,7 @@ contracts_table = Table(
     Column("start_date", Date),
     Column("end_date", Date),
     Column("status", String(20)),
+    Column("workflow_stage", String(20)),
     Column("organization_id", BigInteger),
 )
 
@@ -134,6 +145,17 @@ financial_values_table = Table(
     Column("financial_type_id", BigInteger),
     Column("area_id", BigInteger),
     Column("contract_id", BigInteger),
+    Column("organization_id", BigInteger),
+)
+
+budgets_table = Table(
+    "budgets",
+    metadata,
+    Column("id", BigInteger, primary_key=True),
+    Column("business_area_id", BigInteger),
+    Column("category", String(10)),
+    Column("year_value", Integer),
+    Column("target_amount", Float),
     Column("organization_id", BigInteger),
 )
 
@@ -152,6 +174,25 @@ def parse_args():
     parser.add_argument("--reset", action="store_true", help="Delete existing SYN-* data before seeding")
     parser.add_argument("--yes", action="store_true", help="Skip interactive confirmation prompts")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--org-id", type=int, default=None,
+        help="Only seed this organization id (default: all organizations with usable reference data)",
+    )
+    parser.add_argument(
+        "--manager-id", type=int, default=None,
+        help="Assign every seeded contract to this manager id (requires --org-id). "
+             "Without it, contracts are created unassigned (manager_id NULL) as before.",
+    )
+    parser.add_argument(
+        "--wipe-org", action="store_true",
+        help="DESTRUCTIVE: delete ALL contracts/financial_values/budgets for --org-id "
+             "(not just SYN-* rows), then reseed. Requires --org-id. Intended for a "
+             "dedicated demo organization that never holds real customer data.",
+    )
+    parser.add_argument(
+        "--skip-budgets", action="store_true",
+        help="Do not create/refresh yearly budgets per business area",
+    )
     return parser.parse_args()
 
 
@@ -175,7 +216,10 @@ def random_status(rng):
     return STATUS_WEIGHTS[-1][0]
 
 
-def random_start_date(rng, today):
+def random_start_date(rng, today, status=None):
+    if status == "DRAFT":
+        # Drafts are freshly created, awaiting approval - not seasoned history.
+        return today - timedelta(days=rng.randint(0, 45))
     # 80% "seasoned" contracts (13-36 months old) guarantee enough history for
     # a meaningful forecast trend; 20% "recent" ones (1-12 months) add variety.
     if rng.random() < 0.8:
@@ -186,8 +230,8 @@ def random_start_date(rng, today):
 
 
 def build_end_date(rng, status, start_date, today):
-    if status == "ACTIVE":
-        if rng.random() < 0.15:
+    if status in ("ACTIVE", "DRAFT"):
+        if status == "ACTIVE" and rng.random() < 0.15:
             return None
         return today + timedelta(days=rng.randint(30, 36 * 30))
     if status == "EXPIRED":
@@ -291,11 +335,83 @@ def reset_org_synthetic_data(conn, org_id):
     return result.rowcount
 
 
+def wipe_org_data(conn, org_id):
+    """Delete ALL contracts/financial_values/budgets for org_id, regardless of
+    naming. Only ever call this for a dedicated demo organization that holds
+    no real customer data - it does not scope by SYN_PREFIX like
+    reset_org_synthetic_data(), on purpose, so a nightly reset also undoes
+    whatever a demo visitor created or edited through the app itself."""
+    conn.execute(
+        text(
+            "DELETE cwe FROM contract_workflow_events cwe "
+            "JOIN contracts c ON cwe.contract_id = c.id "
+            "WHERE c.organization_id = :oid"
+        ),
+        {"oid": org_id},
+    )
+    conn.execute(
+        text(
+            "DELETE ch FROM contract_history ch "
+            "JOIN contracts c ON ch.contract_id = c.id "
+            "WHERE c.organization_id = :oid"
+        ),
+        {"oid": org_id},
+    )
+    conn.execute(
+        text(
+            "DELETE cm FROM contract_manager cm "
+            "JOIN contracts c ON cm.contract_id = c.id "
+            "WHERE c.organization_id = :oid"
+        ),
+        {"oid": org_id},
+    )
+    conn.execute(
+        text(
+            "DELETE fv FROM financial_values fv "
+            "JOIN contracts c ON fv.contract_id = c.id "
+            "WHERE c.organization_id = :oid"
+        ),
+        {"oid": org_id},
+    )
+    contracts_deleted = conn.execute(
+        text("DELETE FROM contracts WHERE organization_id = :oid"), {"oid": org_id}
+    ).rowcount
+    budgets_deleted = conn.execute(
+        text("DELETE FROM budgets WHERE organization_id = :oid"), {"oid": org_id}
+    ).rowcount
+    return contracts_deleted, budgets_deleted
+
+
+def seed_budgets(conn, org, areas, type_ids, contracts_fv_by_area_category, year):
+    """One REVENUE and one COST budget per business area for `year`, set to
+    ~15% above whatever was actually realized that year so the Budgets page
+    shows a mix of on-track and over-budget areas rather than all-green."""
+    if "Ricavi" not in type_ids or "Costi" not in type_ids:
+        return 0
+    rows = []
+    for area in areas:
+        for category, type_name in (("REVENUE", "Ricavi"), ("COST", "Costi")):
+            realized = contracts_fv_by_area_category.get((area["id"], type_name), 0.0)
+            target = max(realized * 1.15, 10_000.0)
+            rows.append({
+                "business_area_id": area["id"],
+                "category": category,
+                "year_value": year,
+                "target_amount": round(target, 2),
+                "organization_id": org["id"],
+            })
+    if rows:
+        conn.execute(insert(budgets_table), rows)
+    return len(rows)
+
+
 def seed_organization(conn, rng, np_rng, org, areas, type_ids, args, today, start_seq):
     type_ids_ok = "Ricavi" in type_ids and "Costi" in type_ids
     if not areas or not type_ids_ok:
         print(f"  [SKIP] org '{org['name']}' (id={org['id']}): missing business_areas or SALES/COSTS financial_types")
-        return 0, 0
+        return 0, 0, 0
+
+    id_to_type_name = {type_ids["Ricavi"]: "Ricavi", type_ids["Costi"]: "Costi"}
 
     outlier_count = max(1, round(args.contracts_per_org * args.outlier_ratio))
     outlier_flags = [True] * outlier_count + [False] * (args.contracts_per_org - outlier_count)
@@ -303,12 +419,13 @@ def seed_organization(conn, rng, np_rng, org, areas, type_ids, args, today, star
 
     fv_rows_all = []
     contracts_created = 0
+    realized_this_year = {}  # (area_id, "Ricavi"/"Costi") -> sum for today.year
 
     for i in range(args.contracts_per_org):
         seq = start_seq + i
         area = rng.choice(areas)
         status = random_status(rng)
-        start_date = random_start_date(rng, today)
+        start_date = random_start_date(rng, today, status)
         end_date = build_end_date(rng, status, start_date, today)
 
         contract_values = {
@@ -317,15 +434,20 @@ def seed_organization(conn, rng, np_rng, org, areas, type_ids, args, today, star
             "wbs_code": f"WBS-{rng.randint(1000, 9999)}" if rng.random() < 0.7 else None,
             "project_name": random_project_name(rng, area["name"]),
             "area_id": area["id"],
-            "manager_id": None,
+            "manager_id": args.manager_id,
             "start_date": start_date,
             "end_date": end_date,
             "status": status,
+            "workflow_stage": "DRAFT" if status == "DRAFT" else None,
             "organization_id": org["id"],
         }
         result = conn.execute(insert(contracts_table).values(**contract_values))
         contract_id = result.inserted_primary_key[0]
         contracts_created += 1
+
+        if status == "DRAFT":
+            # Not yet approved/started - no realized financial history.
+            continue
 
         base_amount = sample_base_amount(np_rng, outlier_flags[i])
         growth_rate = rng.uniform(-0.01, 0.025)
@@ -337,18 +459,31 @@ def seed_organization(conn, rng, np_rng, org, areas, type_ids, args, today, star
             row["area_id"] = area["id"]
             row["contract_id"] = contract_id
             row["organization_id"] = org["id"]
+            if row["year_value"] == today.year:
+                key = (area["id"], id_to_type_name[row["financial_type_id"]])
+                realized_this_year[key] = realized_this_year.get(key, 0.0) + row["financial_amount"]
         fv_rows_all.extend(rows)
 
     if fv_rows_all:
         conn.execute(insert(financial_values_table), fv_rows_all)
 
-    return contracts_created, len(fv_rows_all)
+    budgets_created = 0
+    if not args.skip_budgets:
+        budgets_created = seed_budgets(conn, org, areas, type_ids, realized_this_year, today.year)
+
+    return contracts_created, len(fv_rows_all), budgets_created
 
 
 def main():
     args = parse_args()
     if not args.db_url:
         print("Missing DB connection string. Pass --db-url or set the DB_URL environment variable.")
+        sys.exit(1)
+    if args.wipe_org and args.org_id is None:
+        print("--wipe-org requires --org-id (refusing to full-wipe every organization).")
+        sys.exit(1)
+    if args.manager_id is not None and args.org_id is None:
+        print("--manager-id requires --org-id (a manager belongs to exactly one organization).")
         sys.exit(1)
     rng = random.Random(args.seed)
     np_rng = np.random.default_rng(args.seed)
@@ -359,6 +494,12 @@ def main():
     with engine.connect() as conn:
         organizations, areas_by_org, types_by_org = fetch_reference_data(conn)
 
+        if args.org_id is not None:
+            organizations = [o for o in organizations if o["id"] == args.org_id]
+            if not organizations:
+                print(f"No organization with id={args.org_id} found.")
+                sys.exit(1)
+
         if not organizations:
             print("No organizations found in the database. Run the backend (Flyway migrations) first.")
             sys.exit(1)
@@ -366,7 +507,7 @@ def main():
         plan = []
         for org in organizations:
             start_seq, existing_count = next_syn_sequence(conn, org["id"])
-            if existing_count > 0 and not args.reset and not args.yes:
+            if existing_count > 0 and not args.reset and not args.wipe_org and not args.yes:
                 answer = input(
                     f"Org '{org['name']}' (id={org['id']}) has {existing_count} existing synthetic "
                     f"contracts. Add {args.contracts_per_org} more? [y/N] "
@@ -382,23 +523,50 @@ def main():
 
     total_contracts = 0
     total_values = 0
+    total_budgets = 0
     with engine.begin() as conn:
         for org, start_seq in plan:
-            if args.reset:
+            if args.wipe_org:
+                deleted_contracts, deleted_budgets = wipe_org_data(conn, org["id"])
+                print(
+                    f"Org '{org['name']}' (id={org['id']}): wiped {deleted_contracts} contracts "
+                    f"and {deleted_budgets} budgets (full reset, not just synthetic rows)."
+                )
+                start_seq = 1
+            elif args.reset:
                 deleted = reset_org_synthetic_data(conn, org["id"])
                 print(f"Org '{org['name']}' (id={org['id']}): removed {deleted} previous synthetic contracts.")
                 start_seq = 1
+                if not args.skip_budgets:
+                    conn.execute(
+                        text("DELETE FROM budgets WHERE organization_id = :oid AND year_value = :yr"),
+                        {"oid": org["id"], "yr": today.year},
+                    )
+            elif not args.skip_budgets:
+                # Re-running without --reset/--wipe-org would otherwise hit the
+                # unique (area, category, year, org) constraint on budgets.
+                conn.execute(
+                    text("DELETE FROM budgets WHERE organization_id = :oid AND year_value = :yr"),
+                    {"oid": org["id"], "yr": today.year},
+                )
 
             areas = areas_by_org.get(org["id"], [])
             type_ids = types_by_org.get(org["id"], {})
-            created_contracts, created_values = seed_organization(
+            created_contracts, created_values, created_budgets = seed_organization(
                 conn, rng, np_rng, org, areas, type_ids, args, today, start_seq
             )
             total_contracts += created_contracts
             total_values += created_values
-            print(f"Org '{org['name']}' (id={org['id']}): created {created_contracts} contracts, {created_values} financial values.")
+            total_budgets += created_budgets
+            print(
+                f"Org '{org['name']}' (id={org['id']}): created {created_contracts} contracts, "
+                f"{created_values} financial values, {created_budgets} budgets."
+            )
 
-    print(f"\nDone. Total: {total_contracts} contracts, {total_values} financial values across {len(plan)} organization(s).")
+    print(
+        f"\nDone. Total: {total_contracts} contracts, {total_values} financial values, "
+        f"{total_budgets} budgets across {len(plan)} organization(s)."
+    )
 
 
 if __name__ == "__main__":
