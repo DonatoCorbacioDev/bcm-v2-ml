@@ -124,7 +124,7 @@ def test_generate_insights_ollama_unavailable():
          patch("app.services.agent._call_ollama", side_effect=httpx.ConnectError("refused")):
         result = generate_insights(db, 3)
     assert result["report"] is None
-    assert "Ollama service unavailable" in result["error"]
+    assert "Servizio AI non disponibile" in result["error"]
 
 
 def test_generate_insights_passes_org_id_through():

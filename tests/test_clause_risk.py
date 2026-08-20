@@ -45,13 +45,13 @@ def test_call_ollama_http_status_error():
 
 def test_analyze_clauses_empty_text():
     result = analyze_clauses("")
-    assert result == {"clauses": [], "error": "No text provided for analysis."}
+    assert result == {"clauses": [], "error": "Nessun testo disponibile per l'analisi."}
 
 
 def test_analyze_clauses_blank_text():
     result = analyze_clauses("   \n  ")
     assert result["clauses"] == []
-    assert result["error"] == "No text provided for analysis."
+    assert result["error"] == "Nessun testo disponibile per l'analisi."
 
 
 def test_analyze_clauses_success():
@@ -72,21 +72,21 @@ def test_analyze_clauses_ollama_unavailable():
     with patch("app.services.clause_risk._call_ollama", side_effect=httpx.ConnectError("refused")):
         result = analyze_clauses("Some contract text")
     assert result["clauses"] == []
-    assert "Ollama service unavailable" in result["error"]
+    assert "Servizio AI non disponibile" in result["error"]
 
 
 def test_analyze_clauses_malformed_json_response():
     with patch("app.services.clause_risk._call_ollama", return_value="not json"):
         result = analyze_clauses("Some contract text")
     assert result["clauses"] == []
-    assert result["error"] == "Could not parse the AI response."
+    assert result["error"] == "Impossibile interpretare la risposta dell'AI."
 
 
 def test_analyze_clauses_missing_clauses_key():
     with patch("app.services.clause_risk._call_ollama", return_value='{"foo": "bar"}'):
         result = analyze_clauses("Some contract text")
     assert result["clauses"] == []
-    assert result["error"] == "Could not parse the AI response."
+    assert result["error"] == "Impossibile interpretare la risposta dell'AI."
 
 
 def test_analyze_clauses_drops_entries_with_empty_excerpt():

@@ -79,7 +79,7 @@ def generate_insights(db: Session, months: int, org_id: int | None = None) -> di
         prompt = _build_prompt(risk_scores, forecast, settings.REPORT_LANGUAGE)
         report = _call_ollama(prompt)
     except httpx.HTTPError as exc:
-        error = f"Ollama service unavailable: {exc}"
+        error = f"Servizio AI non disponibile: {exc}"
 
     return {
         "riskScores": risk_scores,

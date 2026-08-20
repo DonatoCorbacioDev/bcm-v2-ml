@@ -61,7 +61,7 @@ def _call_ollama(prompt: str) -> str:
 
 def analyze_clauses(text: str) -> dict:
     if not text or not text.strip():
-        return {"clauses": [], "error": "No text provided for analysis."}
+        return {"clauses": [], "error": "Nessun testo disponibile per l'analisi."}
 
     truncated = text[:MAX_TEXT_CHARS]
     prompt = _build_prompt(truncated, settings.REPORT_LANGUAGE)
@@ -69,13 +69,13 @@ def analyze_clauses(text: str) -> dict:
     try:
         raw = _call_ollama(prompt)
     except httpx.HTTPError as exc:
-        return {"clauses": [], "error": f"Ollama service unavailable: {exc}"}
+        return {"clauses": [], "error": f"Servizio AI non disponibile: {exc}"}
 
     try:
         parsed = json.loads(raw)
         clauses = parsed["clauses"]
     except (json.JSONDecodeError, KeyError, TypeError):
-        return {"clauses": [], "error": "Could not parse the AI response."}
+        return {"clauses": [], "error": "Impossibile interpretare la risposta dell'AI."}
 
     # The model occasionally emits a placeholder entry for a category it
     # considered but found no matching text for (empty excerpt/reasoning), or

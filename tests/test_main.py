@@ -88,7 +88,7 @@ def test_agent_insights_ollama_unavailable():
     assert response.status_code == 200
     data = response.json()
     assert data["report"] is None
-    assert "Ollama service unavailable" in data["error"]
+    assert "Servizio AI non disponibile" in data["error"]
 
 
 def test_agent_insights_months_too_low():
