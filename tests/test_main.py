@@ -211,6 +211,37 @@ def test_clause_risk_analysis_requires_text_field():
     assert response.status_code == 422
 
 
+def test_agent_ask_success():
+    with patch("app.services.agent._call_ollama_chat",
+               return_value={"role": "assistant", "content": "Answer text"}):
+        response = client.post("/agent/ask", json={"question": "Any contracts expiring soon?"})
+    assert response.status_code == 200
+    assert response.json() == {"answer": "Answer text", "error": None}
+
+
+def test_agent_ask_requires_question_field():
+    response = client.post("/agent/ask", json={})
+    assert response.status_code == 422
+
+
+def test_agent_ask_ollama_unavailable():
+    with patch("app.services.agent._call_ollama_chat", side_effect=httpx.ConnectError("refused")):
+        response = client.post("/agent/ask", json={"question": "Any question"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["answer"] is None
+    assert "Servizio AI non disponibile" in data["error"]
+
+
+def test_agent_ask_accepts_org_id():
+    with patch("app.services.agent._call_ollama_chat",
+               return_value={"role": "assistant", "content": "ok"}) as mock_chat, \
+         patch("app.services.agent.risk_scoring.compute_risk_scores", return_value=[]):
+        response = client.post("/agent/ask?org_id=3", json={"question": "ok"})
+    assert response.status_code == 200
+    mock_chat.assert_called_once()
+
+
 def test_risk_scores_skips_ml_merge_when_no_matching_contract():
     fake_results = [{"contractId": 99, "customerName": "Test", "riskScore": 0.3, "level": "LOW", "anomalies": []}]
     fake_ml = {1: {"mlScore": 0.9, "mlLevel": "HIGH"}}

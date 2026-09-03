@@ -1,6 +1,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -17,3 +18,16 @@ def get_agent_insights(
     org_id: Annotated[int | None, Query()] = None,
 ):
     return agent.generate_insights(db, months, org_id)
+
+
+class AskAgentRequest(BaseModel):
+    question: str
+
+
+@router.post("/agent/ask")
+def post_ask_agent(
+    request: AskAgentRequest,
+    db: Annotated[Session, Depends(get_db)],
+    org_id: Annotated[int | None, Query()] = None,
+):
+    return agent.ask_agent(db, request.question, org_id)
