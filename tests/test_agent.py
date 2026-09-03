@@ -210,7 +210,7 @@ def test_ask_agent_answers_directly_without_tool_calls():
     with patch("app.services.agent._call_ollama_chat",
                return_value={"role": "assistant", "content": "42 contracts total."}):
         result = ask_agent(db, "How many contracts?", org_id=1)
-    assert result == {"answer": "42 contracts total.", "error": None}
+    assert result == {"answer": "42 contracts total.", "error": None, "proposedAction": None}
 
 
 def test_ask_agent_executes_a_requested_tool_then_answers():
@@ -225,7 +225,7 @@ def test_ask_agent_executes_a_requested_tool_then_answers():
                return_value=[{"customerName": "Acme"}]) as mock_risk:
         result = ask_agent(db, "Which contract is riskiest?", org_id=5)
     mock_risk.assert_called_once_with(db, 5)
-    assert result == {"answer": "Acme is your riskiest contract.", "error": None}
+    assert result == {"answer": "Acme is your riskiest contract.", "error": None, "proposedAction": None}
 
 
 def test_ask_agent_forces_a_final_answer_after_max_iterations():
@@ -239,7 +239,7 @@ def test_ask_agent_forces_a_final_answer_after_max_iterations():
                side_effect=[always_wants_tool, always_wants_tool, always_wants_tool, forced_final]), \
          patch("app.services.agent.risk_scoring.compute_risk_scores", return_value=[]):
         result = ask_agent(db, "Loop forever?", org_id=1)
-    assert result == {"answer": "Best I can say without more tool calls.", "error": None}
+    assert result == {"answer": "Best I can say without more tool calls.", "error": None, "proposedAction": None}
 
 
 def test_ask_agent_returns_error_when_ollama_unavailable():
@@ -248,3 +248,91 @@ def test_ask_agent_returns_error_when_ollama_unavailable():
         result = ask_agent(db, "Any question", org_id=1)
     assert result["answer"] is None
     assert "Servizio AI non disponibile" in result["error"]
+
+
+# ── _run_tool("propose_reminder") / _propose_reminder ─────────────────────────
+
+class ContractMock:
+    def __init__(self, id, customer_name):
+        self.id = id
+        self.customer_name = customer_name
+
+
+def test_propose_reminder_requires_contract_id_and_message():
+    db = MagicMock()
+    assert "error" in _run_tool("propose_reminder", {}, db, org_id=1)
+    assert "error" in _run_tool("propose_reminder", {"contract_id": 1}, db, org_id=1)
+    assert "error" in _run_tool("propose_reminder", {"message": "hi"}, db, org_id=1)
+
+
+def test_propose_reminder_scopes_lookup_by_org_id():
+    db = MagicMock()
+    contract = ContractMock(1, "Acme")
+    db.query.return_value.filter.return_value.filter.return_value.first.return_value = contract
+
+    result = _run_tool("propose_reminder", {"contract_id": 1, "message": "Rinnovo in scadenza"}, db, org_id=7)
+
+    assert result == {
+        "proposedAction": {
+            "type": "CREATE_REMINDER",
+            "contractId": 1,
+            "customerName": "Acme",
+            "message": "Rinnovo in scadenza",
+        }
+    }
+
+
+def test_propose_reminder_returns_error_when_contract_not_in_org():
+    """A contract_id belonging to another organization must resolve to nothing —
+    never leak that other org's customer name into the tool result."""
+    db = MagicMock()
+    db.query.return_value.filter.return_value.filter.return_value.first.return_value = None
+
+    result = _run_tool("propose_reminder", {"contract_id": 999, "message": "hi"}, db, org_id=7)
+
+    assert "error" in result
+    assert "proposedAction" not in result
+
+
+def test_propose_reminder_without_org_id_still_looks_up_the_contract():
+    db = MagicMock()
+    contract = ContractMock(2, "Beta")
+    db.query.return_value.filter.return_value.first.return_value = contract
+
+    result = _run_tool("propose_reminder", {"contract_id": 2, "message": "hi"}, db, org_id=None)
+
+    assert result["proposedAction"]["contractId"] == 2
+
+
+# ── ask_agent surfaces proposedAction ──────────────────────────────────────────
+
+def test_ask_agent_surfaces_proposed_action_alongside_the_answer():
+    db = MagicMock()
+    tool_request = {
+        "role": "assistant", "content": "",
+        "tool_calls": [{"function": {
+            "name": "propose_reminder",
+            "arguments": {"contract_id": 1, "message": "Rinnovo in scadenza"},
+        }}],
+    }
+    final_answer = {"role": "assistant", "content": "Ho preparato un promemoria, confermi?"}
+    contract = ContractMock(1, "Acme")
+    with patch("app.services.agent._call_ollama_chat", side_effect=[tool_request, final_answer]):
+        db.query.return_value.filter.return_value.filter.return_value.first.return_value = contract
+        result = ask_agent(db, "Ricordami di rinnovare il contratto Acme", org_id=7)
+
+    assert result["answer"] == "Ho preparato un promemoria, confermi?"
+    assert result["proposedAction"] == {
+        "type": "CREATE_REMINDER",
+        "contractId": 1,
+        "customerName": "Acme",
+        "message": "Rinnovo in scadenza",
+    }
+
+
+def test_ask_agent_proposed_action_is_none_when_no_such_tool_is_called():
+    db = MagicMock()
+    with patch("app.services.agent._call_ollama_chat",
+               return_value={"role": "assistant", "content": "42 contracts total."}):
+        result = ask_agent(db, "How many contracts?", org_id=1)
+    assert result["proposedAction"] is None

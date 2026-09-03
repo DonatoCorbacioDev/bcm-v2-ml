@@ -4,6 +4,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from ..config import settings
+from ..models import Contract
 from . import forecasting, risk_scoring
 
 TOP_RISK_CONTRACTS = 5
@@ -46,6 +47,33 @@ _TOOLS = [
                     },
                 },
                 "required": ["months"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "propose_reminder",
+            "description": (
+                "Prepares a suggested in-app reminder about one contract for the user to "
+                "review. This does NOT create or send anything by itself — the user must "
+                "explicitly confirm the suggestion in the app before it becomes a real "
+                "reminder. Use the contract_id of a contract already seen via another tool "
+                "call in this conversation."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "contract_id": {
+                        "type": "integer",
+                        "description": "id of the contract this reminder is about.",
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "Short reminder text to suggest to the user.",
+                    },
+                },
+                "required": ["contract_id", "message"],
             },
         },
     },
@@ -144,7 +172,38 @@ def _run_tool(name: str, arguments: dict, db: Session, org_id: int | None) -> ob
         months = int(arguments.get("months") or 3)
         months = min(max(months, 1), 24)
         return forecasting.compute_forecast(db, months, org_id)
+    if name == "propose_reminder":
+        return _propose_reminder(arguments, db, org_id)
     return {"error": f"Unknown tool: {name}"}
+
+
+def _propose_reminder(arguments: dict, db: Session, org_id: int | None) -> dict:
+    contract_id = arguments.get("contract_id")
+    message = str(arguments.get("message") or "").strip()
+    if not contract_id or not message:
+        return {"error": "contract_id and message are required"}
+
+    # Scoped by org_id exactly like every read tool above — a contract_id the
+    # model saw (or guessed) for a different organization must resolve to
+    # nothing, never leak that other org's customer name into this response.
+    query = db.query(Contract).filter(Contract.id == contract_id)
+    if org_id is not None:
+        query = query.filter(Contract.organization_id == org_id)
+    contract = query.first()
+    if contract is None:
+        return {"error": f"Contract {contract_id} not found"}
+
+    # Not a write: this is a suggestion surfaced to the user in ask_agent's
+    # response. The actual notification is only created if the user confirms
+    # it via the backend's own authenticated, re-validated endpoint.
+    return {
+        "proposedAction": {
+            "type": "CREATE_REMINDER",
+            "contractId": contract.id,
+            "customerName": contract.customer_name,
+            "message": message,
+        }
+    }
 
 
 def _call_ollama_chat(messages: list, tools: list | None) -> dict:
@@ -174,23 +233,26 @@ def ask_agent(db: Session, question: str, org_id: int | None = None) -> dict:
         },
         {"role": "user", "content": question},
     ]
+    proposed_action = None
 
     try:
         for _ in range(MAX_TOOL_ITERATIONS):
             message = _call_ollama_chat(messages, _TOOLS)
             tool_calls = message.get("tool_calls") or []
             if not tool_calls:
-                return {"answer": message.get("content"), "error": None}
+                return {"answer": message.get("content"), "error": None, "proposedAction": proposed_action}
 
             messages.append(message)
             for call in tool_calls:
                 function = call.get("function", {})
                 result = _run_tool(function.get("name", ""), function.get("arguments") or {}, db, org_id)
+                if isinstance(result, dict) and "proposedAction" in result:
+                    proposed_action = result["proposedAction"]
                 messages.append({"role": "tool", "content": json.dumps(result)})
 
         # Still requesting tools after MAX_TOOL_ITERATIONS — ask once more
         # without tools so the model is forced to answer with what it has.
         final = _call_ollama_chat(messages, tools=None)
-        return {"answer": final.get("content"), "error": None}
+        return {"answer": final.get("content"), "error": None, "proposedAction": proposed_action}
     except httpx.HTTPError as exc:
-        return {"answer": None, "error": f"Servizio AI non disponibile: {exc}"}
+        return {"answer": None, "error": f"Servizio AI non disponibile: {exc}", "proposedAction": None}

@@ -216,7 +216,7 @@ def test_agent_ask_success():
                return_value={"role": "assistant", "content": "Answer text"}):
         response = client.post("/agent/ask", json={"question": "Any contracts expiring soon?"})
     assert response.status_code == 200
-    assert response.json() == {"answer": "Answer text", "error": None}
+    assert response.json() == {"answer": "Answer text", "error": None, "proposedAction": None}
 
 
 def test_agent_ask_requires_question_field():
