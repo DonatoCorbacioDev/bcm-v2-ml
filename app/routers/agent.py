@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..security import verify_internal_api_key
+from ..security import InternalClaims, verify_internal_api_key, verify_internal_claims
 from ..services import agent
 
 router = APIRouter(dependencies=[Depends(verify_internal_api_key)])
@@ -14,11 +14,10 @@ router = APIRouter(dependencies=[Depends(verify_internal_api_key)])
 @router.get("/agent/insights")
 def get_agent_insights(
     db: Annotated[Session, Depends(get_db)],
+    claims: Annotated[InternalClaims, Depends(verify_internal_claims)],
     months: Annotated[int, Query(ge=1, le=24)] = 3,
-    org_id: Annotated[int | None, Query()] = None,
-    manager_id: Annotated[int | None, Query()] = None,
 ):
-    return agent.generate_insights(db, months, org_id, manager_id)
+    return agent.generate_insights(db, months, claims.org_id, claims.manager_id)
 
 
 class AskAgentRequest(BaseModel):
@@ -29,7 +28,6 @@ class AskAgentRequest(BaseModel):
 def post_ask_agent(
     request: AskAgentRequest,
     db: Annotated[Session, Depends(get_db)],
-    org_id: Annotated[int | None, Query()] = None,
-    manager_id: Annotated[int | None, Query()] = None,
+    claims: Annotated[InternalClaims, Depends(verify_internal_claims)],
 ):
-    return agent.ask_agent(db, request.question, org_id, manager_id)
+    return agent.ask_agent(db, request.question, claims.org_id, claims.manager_id)

@@ -21,5 +21,14 @@ class Settings(BaseSettings):
     # outside the backend's trusted network.
     INTERNAL_API_KEY: str = ""
 
+    # RSA public key (X.509, base64), used to verify the X-Internal-Claims JWT
+    # the backend signs asserting org_id/manager_id for each request. Empty
+    # disables verification (local dev) — org_id/manager_id are then trusted
+    # directly from the query string, same posture as INTERNAL_API_KEY empty.
+    # The matching private key lives only on the backend (ml.claims.private-key),
+    # never here — see bcm-v2-backend's MlClaimsSigner for why this is
+    # asymmetric rather than a second shared secret.
+    INTERNAL_CLAIMS_PUBLIC_KEY: str = ""
+
 
 settings = Settings()
