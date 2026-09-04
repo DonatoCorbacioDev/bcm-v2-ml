@@ -9,6 +9,12 @@ from . import forecasting, risk_scoring
 
 TOP_RISK_CONTRACTS = 5
 
+# Raised by _call_ollama/_call_ollama_chat when Ollama is unreachable
+# (httpx.HTTPError) or returns a 2xx response we can't use — malformed JSON
+# (ValueError, which json.JSONDecodeError subclasses) or valid JSON missing
+# the expected "response"/"message" key (KeyError).
+_OLLAMA_ERRORS = (httpx.HTTPError, ValueError, KeyError)
+
 # Bounds how many tool-call round trips a single question can trigger, so a
 # model stuck requesting tools forever can't turn one HTTP request into an
 # unbounded number of Ollama calls.
@@ -153,7 +159,7 @@ def generate_insights(
     try:
         prompt = _build_prompt(risk_scores, forecast, settings.REPORT_LANGUAGE)
         report = _call_ollama(prompt)
-    except httpx.HTTPError as exc:
+    except _OLLAMA_ERRORS as exc:
         error = f"Servizio AI non disponibile: {exc}"
 
     return {
@@ -267,5 +273,5 @@ def ask_agent(
         # without tools so the model is forced to answer with what it has.
         final = _call_ollama_chat(messages, tools=None)
         return {"answer": final.get("content"), "error": None, "proposedAction": proposed_action}
-    except httpx.HTTPError as exc:
+    except _OLLAMA_ERRORS as exc:
         return {"answer": None, "error": f"Servizio AI non disponibile: {exc}", "proposedAction": None}

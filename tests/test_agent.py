@@ -128,6 +128,30 @@ def test_generate_insights_ollama_unavailable():
     assert "Servizio AI non disponibile" in result["error"]
 
 
+def test_generate_insights_handles_malformed_ollama_json():
+    """Regression test for A4: a 2xx response body that isn't valid JSON must
+    degrade gracefully, not crash the request with an unhandled ValueError."""
+    db = MagicMock()
+    with patch("app.services.agent.risk_scoring.compute_risk_scores", return_value=[]), \
+         patch("app.services.agent.forecasting.compute_forecast", return_value={"historical": [], "forecast": []}), \
+         patch("app.services.agent._call_ollama", side_effect=ValueError("Expecting value: line 1 column 1")):
+        result = generate_insights(db, 3)
+    assert result["report"] is None
+    assert "Servizio AI non disponibile" in result["error"]
+
+
+def test_generate_insights_handles_unexpected_ollama_response_shape():
+    """Regression test for A4: valid JSON missing the expected key must
+    degrade gracefully, not crash the request with an unhandled KeyError."""
+    db = MagicMock()
+    with patch("app.services.agent.risk_scoring.compute_risk_scores", return_value=[]), \
+         patch("app.services.agent.forecasting.compute_forecast", return_value={"historical": [], "forecast": []}), \
+         patch("app.services.agent._call_ollama", side_effect=KeyError("response")):
+        result = generate_insights(db, 3)
+    assert result["report"] is None
+    assert "Servizio AI non disponibile" in result["error"]
+
+
 def test_generate_insights_passes_org_id_through():
     db = MagicMock()
     with patch("app.services.agent.risk_scoring.compute_risk_scores", return_value=[]) as mock_risk, \
@@ -293,6 +317,44 @@ def test_ask_agent_returns_error_when_ollama_unavailable():
     db = MagicMock()
     with patch("app.services.agent._call_ollama_chat", side_effect=httpx.ConnectError("refused")):
         result = ask_agent(db, "Any question", org_id=1)
+    assert result["answer"] is None
+    assert "Servizio AI non disponibile" in result["error"]
+
+
+def test_ask_agent_handles_malformed_ollama_json():
+    """Regression test for A4: same malformed-JSON handling as generate_insights,
+    for the tool-calling chat endpoint."""
+    db = MagicMock()
+    with patch("app.services.agent._call_ollama_chat", side_effect=ValueError("Expecting value: line 1 column 1")):
+        result = ask_agent(db, "Any question", org_id=1)
+    assert result["answer"] is None
+    assert result["proposedAction"] is None
+    assert "Servizio AI non disponibile" in result["error"]
+
+
+def test_ask_agent_handles_unexpected_ollama_response_shape():
+    """Regression test for A4: valid JSON missing the "message" key must
+    degrade gracefully instead of raising an unhandled KeyError."""
+    db = MagicMock()
+    with patch("app.services.agent._call_ollama_chat", side_effect=KeyError("message")):
+        result = ask_agent(db, "Any question", org_id=1)
+    assert result["answer"] is None
+    assert result["proposedAction"] is None
+    assert "Servizio AI non disponibile" in result["error"]
+
+
+def test_ask_agent_handles_malformed_json_on_forced_final_call():
+    """Regression test for A4: the forced final call after MAX_TOOL_ITERATIONS
+    goes through the same except clause as the main loop."""
+    db = MagicMock()
+    always_wants_tool = {
+        "role": "assistant", "content": "",
+        "tool_calls": [{"function": {"name": "get_risk_scores", "arguments": {}}}],
+    }
+    with patch("app.services.agent._call_ollama_chat",
+               side_effect=[always_wants_tool, always_wants_tool, always_wants_tool, ValueError("bad json")]), \
+         patch("app.services.agent.risk_scoring.compute_risk_scores", return_value=[]):
+        result = ask_agent(db, "Loop forever?", org_id=1)
     assert result["answer"] is None
     assert "Servizio AI non disponibile" in result["error"]
 
