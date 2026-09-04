@@ -14,10 +14,11 @@ router = APIRouter(dependencies=[Depends(verify_internal_api_key)])
 def get_risk_scores(
     db: Annotated[Session, Depends(get_db)],
     org_id: Annotated[int | None, Query()] = None,
+    manager_id: Annotated[int | None, Query()] = None,
 ):
-    results = risk_scoring.compute_risk_scores(db, org_id)
+    results = risk_scoring.compute_risk_scores(db, org_id, manager_id)
 
-    ml_scores = ml_risk_scoring.compute_ml_risk_scores(db, org_id)
+    ml_scores = ml_risk_scoring.compute_ml_risk_scores(db, org_id, manager_id)
     if ml_scores:
         for item in results:
             ml = ml_scores.get(item["contractId"])

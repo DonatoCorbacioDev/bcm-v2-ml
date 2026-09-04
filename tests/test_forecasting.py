@@ -97,6 +97,29 @@ def test_forecast_without_org_id_does_not_filter():
     session.query.return_value.filter.assert_not_called()
 
 
+def test_forecast_with_manager_id_joins_and_filters_by_manager():
+    rows = [FVMock(2024, 1, 10000.0)]
+    session = MagicMock()
+    session.query.return_value.join.return_value.filter.return_value.all.return_value = rows
+
+    result = compute_forecast(session, 3, org_id=7, manager_id=42)
+
+    session.query.return_value.join.return_value.filter.assert_called_once()
+    assert len(result["historical"]) == 1
+
+
+def test_forecast_manager_id_takes_precedence_over_org_id():
+    # Regression test: when both are given (a MANAGER caller), manager_id must
+    # be the one applied — org_id alone would leak the whole org's data.
+    rows = [FVMock(2024, 1, 10000.0)]
+    session = MagicMock()
+    session.query.return_value.join.return_value.filter.return_value.all.return_value = rows
+
+    compute_forecast(session, 3, org_id=7, manager_id=42)
+
+    session.query.return_value.filter.assert_not_called()
+
+
 def test_forecast_reliable_flag_false_when_fewer_than_12_months():
     rows = [FVMock(2024, m, 10000.0) for m in range(1, 7)]  # 6 months
     result = compute_forecast(make_session(rows), 3)

@@ -142,9 +142,11 @@ def _call_ollama(prompt: str) -> str:
     return response.json()["response"]
 
 
-def generate_insights(db: Session, months: int, org_id: int | None = None) -> dict:
-    risk_scores = risk_scoring.compute_risk_scores(db, org_id)
-    forecast = forecasting.compute_forecast(db, months, org_id)
+def generate_insights(
+    db: Session, months: int, org_id: int | None = None, manager_id: int | None = None
+) -> dict:
+    risk_scores = risk_scoring.compute_risk_scores(db, org_id, manager_id)
+    forecast = forecasting.compute_forecast(db, months, org_id, manager_id)
 
     report = None
     error = None
@@ -162,32 +164,39 @@ def generate_insights(db: Session, months: int, org_id: int | None = None) -> di
     }
 
 
-def _run_tool(name: str, arguments: dict, db: Session, org_id: int | None) -> object:
-    # org_id always comes from ask_agent's own parameter, never from `arguments`
-    # (the model's tool-call input) — that boundary is what keeps a tool call
-    # scoped to the caller's own organization regardless of what the model asks for.
+def _run_tool(
+    name: str, arguments: dict, db: Session, org_id: int | None, manager_id: int | None = None
+) -> object:
+    # org_id/manager_id always come from ask_agent's own parameters, never from
+    # `arguments` (the model's tool-call input) — that boundary is what keeps a
+    # tool call scoped to the caller's own organization/manager regardless of
+    # what the model asks for.
     if name == "get_risk_scores":
-        return risk_scoring.compute_risk_scores(db, org_id)
+        return risk_scoring.compute_risk_scores(db, org_id, manager_id)
     if name == "get_forecast":
         months = int(arguments.get("months") or 3)
         months = min(max(months, 1), 24)
-        return forecasting.compute_forecast(db, months, org_id)
+        return forecasting.compute_forecast(db, months, org_id, manager_id)
     if name == "propose_reminder":
-        return _propose_reminder(arguments, db, org_id)
+        return _propose_reminder(arguments, db, org_id, manager_id)
     return {"error": f"Unknown tool: {name}"}
 
 
-def _propose_reminder(arguments: dict, db: Session, org_id: int | None) -> dict:
+def _propose_reminder(
+    arguments: dict, db: Session, org_id: int | None, manager_id: int | None = None
+) -> dict:
     contract_id = arguments.get("contract_id")
     message = str(arguments.get("message") or "").strip()
     if not contract_id or not message:
         return {"error": "contract_id and message are required"}
 
-    # Scoped by org_id exactly like every read tool above — a contract_id the
-    # model saw (or guessed) for a different organization must resolve to
-    # nothing, never leak that other org's customer name into this response.
+    # Scoped by manager_id/org_id exactly like every read tool above — a
+    # contract_id the model saw (or guessed) for a different manager/org must
+    # resolve to nothing, never leak that customer name into this response.
     query = db.query(Contract).filter(Contract.id == contract_id)
-    if org_id is not None:
+    if manager_id is not None:
+        query = query.filter(Contract.manager_id == manager_id)
+    elif org_id is not None:
         query = query.filter(Contract.organization_id == org_id)
     contract = query.first()
     if contract is None:
@@ -215,11 +224,13 @@ def _call_ollama_chat(messages: list, tools: list | None) -> dict:
     return response.json()["message"]
 
 
-def ask_agent(db: Session, question: str, org_id: int | None = None) -> dict:
+def ask_agent(
+    db: Session, question: str, org_id: int | None = None, manager_id: int | None = None
+) -> dict:
     """Answers a free-text question by letting the model call read-only tools
     (risk scores, forecast) grounded in the caller's own data, instead of
-    generating a fixed report. org_id is bound here, once, from the
-    authenticated request — see _run_tool for why it never flows through the
+    generating a fixed report. org_id/manager_id are bound here, once, from the
+    authenticated request — see _run_tool for why they never flow through the
     model's tool-call arguments."""
     messages = [
         {
@@ -245,7 +256,9 @@ def ask_agent(db: Session, question: str, org_id: int | None = None) -> dict:
             messages.append(message)
             for call in tool_calls:
                 function = call.get("function", {})
-                result = _run_tool(function.get("name", ""), function.get("arguments") or {}, db, org_id)
+                result = _run_tool(
+                    function.get("name", ""), function.get("arguments") or {}, db, org_id, manager_id
+                )
                 if isinstance(result, dict) and "proposedAction" in result:
                     proposed_action = result["proposedAction"]
                 messages.append({"role": "tool", "content": json.dumps(result)})

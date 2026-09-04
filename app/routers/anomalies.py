@@ -14,5 +14,6 @@ router = APIRouter(dependencies=[Depends(verify_internal_api_key)])
 def get_anomalies(
     db: Annotated[Session, Depends(get_db)],
     org_id: Annotated[int | None, Query()] = None,
+    manager_id: Annotated[int | None, Query()] = None,
 ):
-    return anomaly_detection.compute_anomalies(db, org_id)
+    return anomaly_detection.compute_anomalies(db, org_id, manager_id)

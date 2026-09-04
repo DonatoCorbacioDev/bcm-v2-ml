@@ -236,3 +236,13 @@ class TestComputeMlRiskScores:
             ml_risk_scoring.compute_ml_risk_scores(db, org_id=None)
         # Without org_id, .filter() should NOT be called on Contract query
         db.query.return_value.filter.assert_not_called()
+
+    def test_manager_id_takes_precedence_over_org_id(self):
+        # Regression test: a MANAGER caller must be scoped by manager_id, never
+        # fall back to the whole org's contracts.
+        mock_model = MagicMock()
+        with patch.object(ml_risk_scoring, "_load_model", return_value=mock_model):
+            db = MagicMock()
+            db.query.return_value.filter.return_value.all.return_value = []
+            ml_risk_scoring.compute_ml_risk_scores(db, org_id=1, manager_id=42)
+        db.query.return_value.filter.assert_called_once()

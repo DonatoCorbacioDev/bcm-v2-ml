@@ -80,7 +80,7 @@ def _build_feature_matrix(
     return np.array(rows, dtype=float) if rows else np.empty((0, 7))
 
 
-def compute_ml_risk_scores(db: Session, org_id: int | None = None) -> dict:
+def compute_ml_risk_scores(db: Session, org_id: int | None = None, manager_id: int | None = None) -> dict:
     """
     Returns a dict keyed by contract_id:
         {contract_id: {"mlScore": float, "mlLevel": str}}
@@ -92,7 +92,9 @@ def compute_ml_risk_scores(db: Session, org_id: int | None = None) -> dict:
         return {}
 
     contracts_query = db.query(Contract)
-    if org_id is not None:
+    if manager_id is not None:
+        contracts_query = contracts_query.filter(Contract.manager_id == manager_id)
+    elif org_id is not None:
         contracts_query = contracts_query.filter(Contract.organization_id == org_id)
     contracts = contracts_query.all()
     if not contracts:

@@ -31,7 +31,7 @@ def _severity(score: float) -> str:
     return "LOW"
 
 
-def compute_anomalies(db: Session, org_id: int | None = None) -> list[dict]:
+def compute_anomalies(db: Session, org_id: int | None = None, manager_id: int | None = None) -> list[dict]:
     """Return financial records flagged as anomalous by Isolation Forest.
 
     Uses financial_amount and cyclical month encoding as features.
@@ -49,7 +49,9 @@ def compute_anomalies(db: Session, org_id: int | None = None) -> list[dict]:
         )
         .join(Contract, FinancialValue.contract_id == Contract.id)
     )
-    if org_id is not None:
+    if manager_id is not None:
+        stmt = stmt.where(Contract.manager_id == manager_id)
+    elif org_id is not None:
         stmt = stmt.where(FinancialValue.organization_id == org_id)
 
     rows = db.execute(stmt).all()

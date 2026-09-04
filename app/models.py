@@ -11,6 +11,7 @@ class Contract(Base):
     start_date = Column(Date)
     end_date = Column(Date)
     organization_id = Column(BigInteger)
+    manager_id = Column(BigInteger)
 
 
 class FinancialValue(Base):

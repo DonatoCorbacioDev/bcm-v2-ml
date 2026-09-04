@@ -134,8 +134,18 @@ def test_generate_insights_passes_org_id_through():
          patch("app.services.agent.forecasting.compute_forecast", return_value={"historical": [], "forecast": []}) as mock_forecast, \
          patch("app.services.agent._call_ollama", return_value="Generated report"):
         generate_insights(db, 3, org_id=9)
-    mock_risk.assert_called_once_with(db, 9)
-    mock_forecast.assert_called_once_with(db, 3, 9)
+    mock_risk.assert_called_once_with(db, 9, None)
+    mock_forecast.assert_called_once_with(db, 3, 9, None)
+
+
+def test_generate_insights_passes_manager_id_through():
+    db = MagicMock()
+    with patch("app.services.agent.risk_scoring.compute_risk_scores", return_value=[]) as mock_risk, \
+         patch("app.services.agent.forecasting.compute_forecast", return_value={"historical": [], "forecast": []}) as mock_forecast, \
+         patch("app.services.agent._call_ollama", return_value="Generated report"):
+        generate_insights(db, 3, org_id=9, manager_id=42)
+    mock_risk.assert_called_once_with(db, 9, 42)
+    mock_forecast.assert_called_once_with(db, 3, 9, 42)
 
 
 # ── _run_tool ─────────────────────────────────────────────────────────────────
@@ -144,7 +154,15 @@ def test_run_tool_get_risk_scores_uses_bound_org_id():
     db = MagicMock()
     with patch("app.services.agent.risk_scoring.compute_risk_scores", return_value=["scores"]) as mock_risk:
         result = _run_tool("get_risk_scores", {}, db, org_id=7)
-    mock_risk.assert_called_once_with(db, 7)
+    mock_risk.assert_called_once_with(db, 7, None)
+    assert result == ["scores"]
+
+
+def test_run_tool_get_risk_scores_uses_bound_manager_id():
+    db = MagicMock()
+    with patch("app.services.agent.risk_scoring.compute_risk_scores", return_value=["scores"]) as mock_risk:
+        result = _run_tool("get_risk_scores", {}, db, org_id=7, manager_id=42)
+    mock_risk.assert_called_once_with(db, 7, 42)
     assert result == ["scores"]
 
 
@@ -152,22 +170,29 @@ def test_run_tool_get_forecast_uses_bound_org_id_and_model_supplied_months():
     db = MagicMock()
     with patch("app.services.agent.forecasting.compute_forecast", return_value={"historical": []}) as mock_forecast:
         result = _run_tool("get_forecast", {"months": 6}, db, org_id=7)
-    mock_forecast.assert_called_once_with(db, 6, 7)
+    mock_forecast.assert_called_once_with(db, 6, 7, None)
     assert result == {"historical": []}
+
+
+def test_run_tool_get_forecast_uses_bound_manager_id():
+    db = MagicMock()
+    with patch("app.services.agent.forecasting.compute_forecast", return_value={}) as mock_forecast:
+        _run_tool("get_forecast", {"months": 6}, db, org_id=7, manager_id=42)
+    mock_forecast.assert_called_once_with(db, 6, 7, 42)
 
 
 def test_run_tool_get_forecast_clamps_out_of_range_months():
     db = MagicMock()
     with patch("app.services.agent.forecasting.compute_forecast", return_value={}) as mock_forecast:
         _run_tool("get_forecast", {"months": 999}, db, org_id=1)
-    mock_forecast.assert_called_once_with(db, 24, 1)
+    mock_forecast.assert_called_once_with(db, 24, 1, None)
 
 
 def test_run_tool_get_forecast_defaults_months_when_missing():
     db = MagicMock()
     with patch("app.services.agent.forecasting.compute_forecast", return_value={}) as mock_forecast:
         _run_tool("get_forecast", {}, db, org_id=1)
-    mock_forecast.assert_called_once_with(db, 3, 1)
+    mock_forecast.assert_called_once_with(db, 3, 1, None)
 
 
 def test_run_tool_ignores_org_id_supplied_by_the_model():
@@ -176,7 +201,15 @@ def test_run_tool_ignores_org_id_supplied_by_the_model():
     db = MagicMock()
     with patch("app.services.agent.risk_scoring.compute_risk_scores", return_value=[]) as mock_risk:
         _run_tool("get_risk_scores", {"org_id": 999}, db, org_id=7)
-    mock_risk.assert_called_once_with(db, 7)
+    mock_risk.assert_called_once_with(db, 7, None)
+
+
+def test_run_tool_ignores_manager_id_supplied_by_the_model():
+    """Same tenant-isolation boundary as org_id above, for manager_id."""
+    db = MagicMock()
+    with patch("app.services.agent.risk_scoring.compute_risk_scores", return_value=[]) as mock_risk:
+        _run_tool("get_risk_scores", {"manager_id": 999}, db, org_id=7, manager_id=42)
+    mock_risk.assert_called_once_with(db, 7, 42)
 
 
 def test_run_tool_unknown_tool_returns_error_dict():
@@ -224,8 +257,22 @@ def test_ask_agent_executes_a_requested_tool_then_answers():
          patch("app.services.agent.risk_scoring.compute_risk_scores",
                return_value=[{"customerName": "Acme"}]) as mock_risk:
         result = ask_agent(db, "Which contract is riskiest?", org_id=5)
-    mock_risk.assert_called_once_with(db, 5)
+    mock_risk.assert_called_once_with(db, 5, None)
     assert result == {"answer": "Acme is your riskiest contract.", "error": None, "proposedAction": None}
+
+
+def test_ask_agent_passes_manager_id_through_to_tools():
+    db = MagicMock()
+    tool_request = {
+        "role": "assistant", "content": "",
+        "tool_calls": [{"function": {"name": "get_risk_scores", "arguments": {}}}],
+    }
+    final_answer = {"role": "assistant", "content": "Acme is your riskiest contract."}
+    with patch("app.services.agent._call_ollama_chat", side_effect=[tool_request, final_answer]), \
+         patch("app.services.agent.risk_scoring.compute_risk_scores",
+               return_value=[{"customerName": "Acme"}]) as mock_risk:
+        ask_agent(db, "Which contract is riskiest?", org_id=5, manager_id=42)
+    mock_risk.assert_called_once_with(db, 5, 42)
 
 
 def test_ask_agent_forces_a_final_answer_after_max_iterations():
@@ -289,6 +336,38 @@ def test_propose_reminder_returns_error_when_contract_not_in_org():
     db.query.return_value.filter.return_value.filter.return_value.first.return_value = None
 
     result = _run_tool("propose_reminder", {"contract_id": 999, "message": "hi"}, db, org_id=7)
+
+    assert "error" in result
+    assert "proposedAction" not in result
+
+
+def test_propose_reminder_scopes_lookup_by_manager_id_over_org_id():
+    """Regression test: when both are given (a MANAGER caller), manager_id
+    must be the scope actually applied — matches _propose_reminder's org_id
+    precedence contract."""
+    db = MagicMock()
+    contract = ContractMock(1, "Acme")
+    db.query.return_value.filter.return_value.filter.return_value.first.return_value = contract
+
+    result = _run_tool(
+        "propose_reminder", {"contract_id": 1, "message": "Rinnovo in scadenza"}, db, org_id=7, manager_id=42
+    )
+
+    assert result["proposedAction"]["contractId"] == 1
+    # Exactly one scoping .filter() beyond the id filter — proves org_id's
+    # branch was skipped in favor of manager_id's.
+    db.query.return_value.filter.return_value.filter.assert_called_once()
+
+
+def test_propose_reminder_returns_error_when_contract_not_managers():
+    """A contract_id belonging to another manager (even in the same org) must
+    resolve to nothing."""
+    db = MagicMock()
+    db.query.return_value.filter.return_value.filter.return_value.first.return_value = None
+
+    result = _run_tool(
+        "propose_reminder", {"contract_id": 1, "message": "hi"}, db, org_id=7, manager_id=42
+    )
 
     assert "error" in result
     assert "proposedAction" not in result

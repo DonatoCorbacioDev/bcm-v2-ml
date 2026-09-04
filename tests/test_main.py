@@ -14,6 +14,9 @@ class MockSession:
     def query(self, *args):
         return self
 
+    def join(self, *args):
+        return self
+
     def filter(self, *args):
         return self
 
@@ -112,6 +115,17 @@ def test_forecast_accepts_org_id():
     assert response.status_code == 200
 
 
+def test_forecast_accepts_manager_id():
+    response = client.get("/forecast?org_id=1&manager_id=42")
+    assert response.status_code == 200
+
+
+def test_risk_scores_accepts_manager_id():
+    response = client.get("/risk-scores?org_id=1&manager_id=42")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
 def test_protected_endpoint_rejects_request_without_key_when_configured(monkeypatch):
     monkeypatch.setattr(settings, "INTERNAL_API_KEY", "secret")
     response = client.get("/risk-scores")
@@ -178,6 +192,13 @@ def test_anomalies_accepts_org_id():
     assert response.status_code == 200
 
 
+def test_anomalies_accepts_manager_id():
+    with patch("app.services.anomaly_detection.compute_anomalies", return_value=[]) as mock_compute:
+        response = client.get("/anomalies?org_id=3&manager_id=42")
+    assert response.status_code == 200
+    assert mock_compute.call_args.args[1:] == (3, 42)
+
+
 def test_lifespan_no_warning_in_development(monkeypatch, caplog):
     monkeypatch.setattr(settings, "ENVIRONMENT", "development")
     monkeypatch.setattr(settings, "INTERNAL_API_KEY", "")
@@ -240,6 +261,19 @@ def test_agent_ask_accepts_org_id():
         response = client.post("/agent/ask?org_id=3", json={"question": "ok"})
     assert response.status_code == 200
     mock_chat.assert_called_once()
+
+
+def test_agent_ask_accepts_manager_id():
+    tool_request = {
+        "role": "assistant", "content": "",
+        "tool_calls": [{"function": {"name": "get_risk_scores", "arguments": {}}}],
+    }
+    final_answer = {"role": "assistant", "content": "ok"}
+    with patch("app.services.agent._call_ollama_chat", side_effect=[tool_request, final_answer]), \
+         patch("app.services.agent.risk_scoring.compute_risk_scores", return_value=[]) as mock_risk:
+        response = client.post("/agent/ask?org_id=3&manager_id=42", json={"question": "ok"})
+    assert response.status_code == 200
+    assert mock_risk.call_args.args[1:] == (3, 42)
 
 
 def test_risk_scores_skips_ml_merge_when_no_matching_contract():

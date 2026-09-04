@@ -193,3 +193,35 @@ def test_compute_risk_scores_with_org_id_filters_query():
 
     assert len(result) == 1
     assert result[0]["contractId"] == 1
+
+
+def test_compute_risk_scores_with_manager_id_filters_contracts_and_totals():
+    today = date.today()
+    contracts = [ContractMock(1, "Acme", today - timedelta(days=5), 7)]
+    fv_rows = [FVRowMock(1, 50000.0)]
+    session = make_org_risk_session(contracts, fv_rows)
+
+    result = compute_risk_scores(session, org_id=7, manager_id=42)
+
+    assert len(result) == 1
+    assert result[0]["contractId"] == 1
+
+
+def test_compute_risk_scores_manager_id_takes_precedence_over_org_id():
+    # Regression test: a MANAGER's totals must come from their own contracts
+    # only, never fall back to filtering FinancialValue by the whole org.
+    today = date.today()
+    contracts = [ContractMock(1, "Acme", today - timedelta(days=5), 7)]
+    fv_rows = [FVRowMock(1, 50000.0)]
+
+    session = MagicMock()
+    contracts_q = MagicMock()
+    contracts_q.filter.return_value.all.return_value = contracts
+    fv_q = MagicMock()
+    fv_q.filter.return_value.group_by.return_value.all.return_value = fv_rows
+    session.query.side_effect = [contracts_q, fv_q]
+
+    compute_risk_scores(session, org_id=7, manager_id=42)
+
+    contracts_q.filter.assert_called_once()
+    fv_q.filter.assert_called_once()

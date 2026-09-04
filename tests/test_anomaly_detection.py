@@ -103,3 +103,20 @@ class TestComputeAnomalies:
         db = _make_db([])
         compute_anomalies(db, org_id=5)
         db.execute.assert_called_once()
+
+    def test_db_execute_called_with_manager_id(self):
+        db = _make_db([])
+        compute_anomalies(db, org_id=5, manager_id=42)
+        db.execute.assert_called_once()
+
+    def test_manager_id_filters_by_manager_not_org(self):
+        # Regression test: a MANAGER call must filter Contract.manager_id, and
+        # must not also (or instead) filter FinancialValue.organization_id —
+        # otherwise it would silently widen back to the whole org.
+        db = _make_db([])
+        compute_anomalies(db, org_id=5, manager_id=42)
+        compiled = str(db.execute.call_args[0][0].compile(
+            compile_kwargs={"literal_binds": True}
+        ))
+        assert "contracts.manager_id = 42" in compiled
+        assert "organization_id" not in compiled

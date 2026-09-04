@@ -15,5 +15,6 @@ def get_forecast(
     db: Annotated[Session, Depends(get_db)],
     months: Annotated[int, Query(ge=1, le=24)] = 3,
     org_id: Annotated[int | None, Query()] = None,
+    manager_id: Annotated[int | None, Query()] = None,
 ):
-    return forecasting.compute_forecast(db, months, org_id)
+    return forecasting.compute_forecast(db, months, org_id, manager_id)

@@ -16,8 +16,9 @@ def get_agent_insights(
     db: Annotated[Session, Depends(get_db)],
     months: Annotated[int, Query(ge=1, le=24)] = 3,
     org_id: Annotated[int | None, Query()] = None,
+    manager_id: Annotated[int | None, Query()] = None,
 ):
-    return agent.generate_insights(db, months, org_id)
+    return agent.generate_insights(db, months, org_id, manager_id)
 
 
 class AskAgentRequest(BaseModel):
@@ -29,5 +30,6 @@ def post_ask_agent(
     request: AskAgentRequest,
     db: Annotated[Session, Depends(get_db)],
     org_id: Annotated[int | None, Query()] = None,
+    manager_id: Annotated[int | None, Query()] = None,
 ):
-    return agent.ask_agent(db, request.question, org_id)
+    return agent.ask_agent(db, request.question, org_id, manager_id)
