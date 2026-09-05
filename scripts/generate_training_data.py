@@ -8,6 +8,13 @@ at serving time. This closes the training/serving skew that existed when this
 script fabricated the 7 feature columns directly (see
 docs/research/dataset_sources.md for the history).
 
+Labels are sampled from class probabilities driven by the visible signal
+PLUS a latent "counterparty reliability" factor that is never exposed as a
+feature (see _sample_latent_reliability) — unlike the previous deterministic
+threshold rule (identical to a subset of the visible features, hence
+trivially learnable), no model fit only on the 7 visible features can
+reproduce this exactly, by construction.
+
 Output: data/synthetic_contracts.csv + data/synthetic_contracts_manifest.json
 
 Run:
@@ -94,16 +101,71 @@ def _sample_monthly_amounts(rng: np.random.Generator, is_outlier: bool) -> list[
     return (base / n_months * noise).tolist()
 
 
-def _assign_labels(days: np.ndarray, status_code: np.ndarray, z: np.ndarray) -> np.ndarray:
-    """Ground-truth label rule — the single source of truth also documented
-    in docs/research/dataset_sources.md and README_ML.md. Keep all three in
-    sync if this changes."""
-    labels = np.zeros(len(days), dtype=int)
-    medium = (days < 180) | (np.abs(z) > 1.0)
-    high = (status_code == STATUS_CODE["EXPIRED"]) | (days < 30) | (np.abs(z) > 2.5)
-    labels[medium] = 1
-    labels[high] = 2
-    return labels
+def _visible_risk_signal(days: np.ndarray, status_code: np.ndarray, z: np.ndarray) -> np.ndarray:
+    """Continuous risk signal in [0, 1] from the same visible information the
+    old deterministic rule used — expiry proximity and financial z-score."""
+    expiry_signal = np.where(
+        status_code == STATUS_CODE["EXPIRED"],
+        1.0,
+        np.clip(1.0 - days / 200.0, 0.0, 1.0),
+    )
+    value_signal = np.clip(np.abs(z) / 3.0, 0.0, 1.0)
+    # Weighted so an expired contract alone (expiry_signal=1.0) already sits
+    # comfortably above the HIGH sigmoid midpoint (0.65) before the latent
+    # reliability factor is even applied — an expired contract is close to
+    # unconditionally high-risk, same as the old deterministic rule treated it.
+    return 0.75 * expiry_signal + 0.25 * value_signal
+
+
+def _sigmoid(x: np.ndarray) -> np.ndarray:
+    return 1.0 / (1.0 + np.exp(-x))
+
+
+def _sample_latent_reliability(rng: np.random.Generator, n: int) -> np.ndarray:
+    """A per-contract factor that influences the true outcome but is NEVER
+    exposed as a feature — a stand-in for real-world information no
+    synthetic dataset built from visible fields alone can capture
+    (counterparty financial health, relationship history, market
+    conditions). Beta(2, 2) centers near 0.5 with most mass away from the
+    extremes, so it meaningfully perturbs the label without swamping the
+    visible signal entirely."""
+    return rng.beta(2.0, 2.0, size=n)
+
+
+def _label_probabilities(
+    days: np.ndarray, status_code: np.ndarray, z: np.ndarray, reliability: np.ndarray
+) -> np.ndarray:
+    """P(LOW), P(MEDIUM), P(HIGH) per row — deterministic given all inputs,
+    including `reliability` (the randomness lives only in how that latent
+    value itself is drawn; see _sample_latent_reliability). Soft sigmoid
+    boundaries instead of hard cutoffs mean two contracts with an identical
+    visible signal can land in different classes, same as real outcomes
+    would — this replaces the old approach of a hard threshold rule plus 5%
+    uniform label noise bolted on afterward."""
+    visible = _visible_risk_signal(days, status_code, z)
+    # Low reliability (unreliable counterparty) pushes risk up; high
+    # reliability pulls it down. The model never sees `reliability`, so even
+    # a perfect fit to the visible features can't reproduce this exactly —
+    # that irreducible gap is the point (see docs/research/dataset_sources.md).
+    combined = np.clip(visible + 0.35 * (0.5 - reliability), 0.0, 1.0)
+
+    p_high = _sigmoid((combined - 0.65) / 0.08)
+    p_low = 1.0 - _sigmoid((combined - 0.35) / 0.08)
+    p_medium = np.clip(1.0 - p_high - p_low, 0.0, 1.0)
+
+    probs = np.stack([p_low, p_medium, p_high], axis=1)
+    return probs / probs.sum(axis=1, keepdims=True)
+
+
+def _assign_labels(rng: np.random.Generator, days: np.ndarray, status_code: np.ndarray, z: np.ndarray) -> np.ndarray:
+    """Ground-truth label — sampled from _label_probabilities, not a
+    deterministic threshold. The label mechanism (visible signal + latent
+    reliability + soft boundaries) is the single source of truth also
+    documented in docs/research/dataset_sources.md and README_ML.md; keep
+    all three in sync if this changes."""
+    reliability = _sample_latent_reliability(rng, len(days))
+    probs = _label_probabilities(days, status_code, z, reliability)
+    return np.array([rng.choice(3, p=p) for p in probs])
 
 
 def generate(n_samples: int = 5000, seed: int = 42, as_of_date: date | None = None) -> pd.DataFrame:
@@ -151,11 +213,7 @@ def generate(n_samples: int = 5000, seed: int = 42, as_of_date: date | None = No
     days = df["days_until_expiry"].to_numpy()
     status_code = df["status_code"].to_numpy()
     z = df["financial_zscore"].to_numpy()
-    labels = _assign_labels(days, status_code, z)
-
-    # 5% label noise: prevents the model from memorizing the rule boundary exactly.
-    noise_idx = rng.choice(n_samples, size=int(0.05 * n_samples), replace=False)
-    labels[noise_idx] = rng.integers(0, 3, size=len(noise_idx))
+    labels = _assign_labels(rng, days, status_code, z)
 
     df["risk_level"] = labels.astype(int)
     return df

@@ -17,8 +17,11 @@ from app.services.risk_features import FEATURES
 from scripts.generate_training_data import (
     SyntheticContract,
     _assign_labels,
+    _label_probabilities,
     _sample_end_date,
+    _sample_latent_reliability,
     _sample_monthly_amounts,
+    _visible_risk_signal,
     generate,
 )
 
@@ -61,36 +64,103 @@ class TestGenerate:
         assert set(counts.index) == {0, 1, 2}
 
 
+class TestVisibleRiskSignal:
+    def test_expired_status_gives_max_expiry_component(self):
+        signal = _visible_risk_signal(np.array([500.0]), np.array([1.0]), np.array([0.0]))
+        assert signal[0] == pytest.approx(0.75)  # 0.75 * 1.0 (expiry) + 0.25 * 0.0 (value)
+
+    def test_far_future_low_zscore_gives_low_signal(self):
+        signal = _visible_risk_signal(np.array([700.0]), np.array([0.0]), np.array([0.1]))
+        assert signal[0] < 0.1
+
+    def test_extreme_zscore_raises_signal(self):
+        low_z = _visible_risk_signal(np.array([700.0]), np.array([0.0]), np.array([0.0]))
+        high_z = _visible_risk_signal(np.array([700.0]), np.array([0.0]), np.array([3.0]))
+        assert high_z[0] > low_z[0]
+
+    def test_signal_bounded_zero_one(self):
+        signal = _visible_risk_signal(np.array([-1000.0]), np.array([1.0]), np.array([50.0]))
+        assert 0.0 <= signal[0] <= 1.0
+
+
+class TestLabelProbabilities:
+    """Deterministic given `reliability` — no sampling randomness here, so
+    these assert exact probability behavior instead of statistical tendency."""
+
+    def test_probabilities_sum_to_one(self):
+        probs = _label_probabilities(
+            np.array([500.0, 10.0]), np.array([0.0, 0.0]), np.array([0.0, 3.0]), np.array([0.5, 0.5])
+        )
+        assert probs.sum(axis=1) == pytest.approx([1.0, 1.0])
+
+    def test_high_visible_risk_favors_high_class(self):
+        probs = _label_probabilities(
+            np.array([5.0]), np.array([1.0]), np.array([3.0]), np.array([0.5])
+        )
+        assert probs[0][2] > probs[0][0]  # P(HIGH) > P(LOW)
+
+    def test_low_visible_risk_favors_low_class(self):
+        probs = _label_probabilities(
+            np.array([700.0]), np.array([0.0]), np.array([0.0]), np.array([0.5])
+        )
+        assert probs[0][0] > probs[0][2]  # P(LOW) > P(HIGH)
+
+    def test_low_reliability_increases_high_probability(self):
+        # Same visible signal, only the hidden reliability factor differs —
+        # this is the part no model trained on visible features alone can see.
+        days, status, z = np.array([300.0]), np.array([0.0]), np.array([0.5])
+        reliable = _label_probabilities(days, status, z, np.array([0.9]))
+        unreliable = _label_probabilities(days, status, z, np.array([0.1]))
+        assert unreliable[0][2] > reliable[0][2]  # P(HIGH) higher when unreliable
+
+
+class TestSampleLatentReliability:
+    def test_values_within_unit_interval(self):
+        rng = np.random.default_rng(1)
+        values = _sample_latent_reliability(rng, 1000)
+        assert values.min() >= 0.0
+        assert values.max() <= 1.0
+
+    def test_centered_near_half(self):
+        rng = np.random.default_rng(1)
+        values = _sample_latent_reliability(rng, 5000)
+        assert values.mean() == pytest.approx(0.5, abs=0.05)
+
+
 class TestAssignLabels:
-    def test_expired_status_is_always_high(self):
-        days = np.array([500.0])
-        status_code = np.array([1.0])  # EXPIRED
-        z = np.array([0.0])
-        assert _assign_labels(days, status_code, z)[0] == 2
+    def test_all_labels_within_range(self):
+        rng = np.random.default_rng(1)
+        days = np.array([500.0, 10.0, 100.0, -5.0])
+        status_code = np.array([0.0, 0.0, 0.0, 1.0])
+        z = np.array([0.0, 0.5, 0.0, 0.0])
+        labels = _assign_labels(rng, days, status_code, z)
+        assert set(labels.tolist()) <= {0, 1, 2}
 
-    def test_near_expiry_is_high(self):
-        days = np.array([10.0])
-        status_code = np.array([0.0])
-        z = np.array([0.0])
-        assert _assign_labels(days, status_code, z)[0] == 2
+    def test_expired_status_is_high_most_of_the_time(self):
+        # Probabilistic, not deterministic — assert the tendency over many
+        # draws rather than a single guaranteed outcome.
+        rng = np.random.default_rng(1)
+        days = np.full(500, 500.0)
+        status_code = np.full(500, 1.0)  # EXPIRED
+        z = np.zeros(500)
+        labels = _assign_labels(rng, days, status_code, z)
+        assert (labels == 2).mean() > 0.7
 
-    def test_extreme_zscore_is_high(self):
-        days = np.array([500.0])
-        status_code = np.array([0.0])
-        z = np.array([3.0])
-        assert _assign_labels(days, status_code, z)[0] == 2
+    def test_far_future_healthy_contract_is_rarely_high(self):
+        rng = np.random.default_rng(1)
+        days = np.full(500, 700.0)
+        status_code = np.zeros(500)
+        z = np.zeros(500)
+        labels = _assign_labels(rng, days, status_code, z)
+        assert (labels == 2).mean() < 0.1
 
-    def test_moderate_days_is_medium(self):
-        days = np.array([100.0])
-        status_code = np.array([0.0])
-        z = np.array([0.0])
-        assert _assign_labels(days, status_code, z)[0] == 1
-
-    def test_far_future_low_zscore_is_low(self):
-        days = np.array([500.0])
-        status_code = np.array([0.0])
-        z = np.array([0.2])
-        assert _assign_labels(days, status_code, z)[0] == 0
+    def test_deterministic_for_same_rng_state(self):
+        days = np.array([500.0, 10.0])
+        status_code = np.array([0.0, 1.0])
+        z = np.array([0.0, 0.0])
+        labels1 = _assign_labels(np.random.default_rng(5), days, status_code, z)
+        labels2 = _assign_labels(np.random.default_rng(5), days, status_code, z)
+        assert labels1.tolist() == labels2.tolist()
 
 
 class TestSampleEndDate:

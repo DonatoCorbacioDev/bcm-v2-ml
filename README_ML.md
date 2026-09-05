@@ -36,19 +36,19 @@ Three candidate models are trained on the same dataset and evaluated with strati
 
 The model with the highest **macro-F1** on the held-out test set (20% stratified split) is serialized to `model/risk_model.joblib` and loaded at service startup.
 
-Labels are assigned by a rule-based heuristic during synthetic data generation
-(`scripts/generate_training_data.py::_assign_labels` — this is the single
-source of truth; see [docs/research/dataset_sources.md](./docs/research/dataset_sources.md)
-for the full rationale):
-- HIGH: `status == EXPIRED` OR `days_until_expiry < 30` OR `|financial_zscore| > 2.5`
-- MEDIUM: `days_until_expiry < 180` OR `|financial_zscore| > 1.0` (and not already HIGH)
-- LOW: otherwise
-
-5% of labels are then randomly reassigned (uniform over LOW/MEDIUM/HIGH) to
-simulate labelling noise and keep the model from memorizing the rule boundary
-exactly. **Important caveat** (see [MODEL_CARD.md](./MODEL_CARD.md#training-data--honesty-check)):
-these are the same signals the model receives as features, so a high macro-F1
-demonstrates rule-reproduction, not validated real-world risk prediction.
+Labels are **sampled**, not assigned by a hard threshold, during synthetic
+data generation (`scripts/generate_training_data.py::_assign_labels` — the
+single source of truth; see
+[docs/research/dataset_sources.md](./docs/research/dataset_sources.md) for
+the full mechanism). In short: a visible risk signal (expiry proximity +
+financial z-score, the same information the model receives as features) is
+blended with a latent "counterparty reliability" factor that is **never**
+exposed to the model, then the label is drawn from the resulting
+LOW/MEDIUM/HIGH probabilities. Because part of what determines the label is
+structurally invisible to the model, no amount of fitting on the 7 visible
+features can reproduce it exactly — see
+[MODEL_CARD.md](./MODEL_CARD.md#training-data--honesty-check) for what that
+means for the reported macro-F1.
 
 ### Training command
 
