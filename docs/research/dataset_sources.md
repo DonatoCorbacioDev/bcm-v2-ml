@@ -57,16 +57,24 @@ with an identical visible signal can land in different classes — because in
 reality they would, for reasons a synthetic dataset can't observe. This
 means **no model trained only on the 7 visible features can reproduce this
 label mechanism exactly, even in principle** — the resulting macro-F1
-(~0.70 on the 2026-09-05 dataset, down from the old 0.957) is the honest
-ceiling given what's actually observable, not an artifact of leakage.
+(0.72 on the current 20,000-sample dataset, down from the old 0.957) is the
+honest ceiling given what's actually observable, not an artifact of leakage.
 
-### Distribution targets
+### Class distribution (actual, not a hand-picked target)
 
-| Class | Target share |
+Unlike the old deterministic rule, the class shares are an outcome of the
+sampling mechanism, not a design target hit by construction — from the
+current dataset (seed 42, 20,000 samples, 100 organizations):
+
+| Class | Share |
 |---|---|
-| LOW | ~40% |
-| MEDIUM | ~35% |
-| HIGH | ~25% |
+| LOW | ~63% |
+| MEDIUM | ~13% |
+| HIGH | ~24% |
+
+MEDIUM's minority share (on top of it being the hardest class - see above)
+is why `scripts/train_risk_model.py` applies SMOTE oversampling during
+training - see [README_ML.md](../../README_ML.md#training).
 
 ---
 

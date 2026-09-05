@@ -2,11 +2,13 @@
 Train and evaluate the ML risk scoring model.
 
 Reads data/synthetic_contracts.csv (generate it first with generate_training_data.py).
-Trains Logistic Regression, Random Forest and XGBoost, selects the best one
-by macro-F1 on a held-out VALIDATION split (never the test split), calibrates
-its probabilities, and reports final metrics against two baselines
-(majority-class and the existing rule-based score) on the TEST split -
-touched exactly once, after model selection is already final.
+Trains a small grid of Logistic Regression / Random Forest / XGBoost
+hyperparameter variants, each with SMOTE oversampling of the minority
+classes (MEDIUM, HIGH) applied only inside training folds. Selects the best
+variant by macro-F1 on a held-out VALIDATION split (never the test split),
+calibrates its probabilities, and reports final metrics against two
+baselines (majority-class and the existing rule-based score) on the TEST
+split - touched exactly once, after model selection is already final.
 
 Run:
     python scripts/generate_training_data.py
@@ -20,13 +22,14 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
+from imblearn.over_sampling import SMOTE
+from imblearn.pipeline import Pipeline as ImbPipeline
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, f1_score, log_loss, roc_auc_score
 from sklearn.model_selection import GroupShuffleSplit, StratifiedKFold, cross_val_score
-from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler, label_binarize
 from xgboost import XGBClassifier
 
@@ -41,30 +44,45 @@ MODEL_PATH = MODEL_DIR / "risk_model.joblib"
 META_PATH = MODEL_DIR / "risk_model_metadata.json"
 
 
-def _build_pipelines() -> dict:
-    return {
-        "LogisticRegression": Pipeline([
+def _build_candidates() -> dict:
+    """A small hyperparameter grid per model family (9 candidates total),
+    each wrapped as an imblearn Pipeline with a SMOTE step first. imblearn's
+    Pipeline (unlike sklearn's) only applies SMOTE during .fit(), never at
+    .predict()/.predict_proba() time - and since it's inside the pipeline,
+    cross_val_score and CalibratedClassifierCV each refit SMOTE independently
+    per fold, using only that fold's own training rows. This oversamples the
+    minority classes (MEDIUM, HIGH) without ever leaking a synthetic
+    neighbor's information into a held-out fold, validation, or test."""
+    candidates = {}
+
+    for C in (0.1, 1.0, 10.0):
+        candidates[f"LogisticRegression(C={C})"] = ImbPipeline([
+            ("smote", SMOTE(random_state=42)),
             ("scaler", StandardScaler()),
-            ("clf", LogisticRegression(
-                max_iter=1000, random_state=42,
-                class_weight="balanced",
-            )),
-        ]),
-        "RandomForest": Pipeline([
+            ("clf", LogisticRegression(max_iter=1000, random_state=42, C=C, class_weight="balanced")),
+        ])
+
+    for n_estimators, max_depth in ((200, 8), (200, 12), (400, None)):
+        candidates[f"RandomForest(n={n_estimators},depth={max_depth})"] = ImbPipeline([
+            ("smote", SMOTE(random_state=42)),
             ("scaler", StandardScaler()),
             ("clf", RandomForestClassifier(
-                n_estimators=200, random_state=42,
+                n_estimators=n_estimators, max_depth=max_depth, random_state=42,
                 class_weight="balanced", n_jobs=-1,
             )),
-        ]),
-        "XGBoost": Pipeline([
+        ])
+
+    for max_depth, learning_rate in ((4, 0.1), (6, 0.1), (6, 0.05)):
+        candidates[f"XGBoost(depth={max_depth},lr={learning_rate})"] = ImbPipeline([
+            ("smote", SMOTE(random_state=42)),
             ("scaler", StandardScaler()),
             ("clf", XGBClassifier(
-                n_estimators=200, max_depth=6, learning_rate=0.1,
+                n_estimators=200, max_depth=max_depth, learning_rate=learning_rate,
                 random_state=42, eval_metric="mlogloss", verbosity=0,
             )),
-        ]),
-    }
+        ])
+
+    return candidates
 
 
 def _group_train_val_test_split(X, y, groups, val_size=0.20, test_size=0.20, seed=42):
@@ -116,11 +134,11 @@ def _report_baseline(name: str, y_pred: np.ndarray, y_test: np.ndarray) -> dict:
     return {"macro_f1": float(macro_f1)}
 
 
-def _select_best_on_validation(pipelines: dict, X_train, y_train, X_val, y_val) -> tuple[str, dict]:
+def _select_best_on_validation(candidates: dict, X_train, y_train, X_val, y_val) -> tuple[str, dict]:
     print(f"\n{'=' * 60}\n  MODEL SELECTION (on validation split, test untouched)\n{'=' * 60}")
     cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
     scores = {}
-    for name, pipeline in pipelines.items():
+    for name, pipeline in candidates.items():
         cv_scores = cross_val_score(pipeline, X_train, y_train, cv=cv, scoring="f1_macro", n_jobs=-1)
         pipeline.fit(X_train, y_train)
         val_f1 = f1_score(y_val, pipeline.predict(X_val), average="macro")
@@ -129,7 +147,7 @@ def _select_best_on_validation(pipelines: dict, X_train, y_train, X_val, y_val) 
             "cv_macro_f1_std": float(cv_scores.std()),
             "val_macro_f1": float(val_f1),
         }
-        print(f"{name:<20} CV macro F1: {cv_scores.mean():.4f} ± {cv_scores.std():.4f}   "
+        print(f"{name:<32} CV macro F1: {cv_scores.mean():.4f} ± {cv_scores.std():.4f}   "
               f"Validation macro F1: {val_f1:.4f}")
 
     best_name = max(scores, key=lambda k: scores[k]["val_macro_f1"])
@@ -172,15 +190,15 @@ def main() -> None:
     }
 
     # --- Model selection on validation, test never touched until the end ---
-    pipelines = _build_pipelines()
-    best_name, selection_scores = _select_best_on_validation(pipelines, X_train, y_train, X_val, y_val)
+    candidates = _build_candidates()
+    best_name, selection_scores = _select_best_on_validation(candidates, X_train, y_train, X_val, y_val)
 
     # Refit the winner on train+validation (more data for the final model)
     # then calibrate its probabilities via internal cross-validation on that
     # same combined set - calibration never sees the test split either.
     X_train_val = np.concatenate([X_train, X_val])
     y_train_val = np.concatenate([y_train, y_val])
-    best_pipeline = _build_pipelines()[best_name]
+    best_pipeline = _build_candidates()[best_name]
     calibrated = CalibratedClassifierCV(best_pipeline, method="isotonic", cv=5)
     calibrated.fit(X_train_val, y_train_val)
 

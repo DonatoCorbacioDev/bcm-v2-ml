@@ -51,16 +51,23 @@ validated against real contract outcomes (see Limitations).
 
 ### 2.2 ML score (supplementary, opt-in via trained model)
 
-- **Model:** best of Logistic Regression, Random Forest and XGBoost — selected
-  by `scripts/train_risk_model.py` on macro-F1 against a held-out
-  **validation** split (the test split is never used for model selection),
-  then refit on train+validation and wrapped in a `CalibratedClassifierCV`
-  (isotonic, 5-fold internal CV) so `predict_proba` outputs are
-  probability-calibrated, not just rank-ordered. On the current dataset,
-  XGBoost was selected. Each candidate is a `Pipeline` with a `StandardScaler`.
+- **Model:** best of 9 candidates — 3 hyperparameter variants each of Logistic
+  Regression, Random Forest and XGBoost — selected by `scripts/train_risk_model.py`
+  on macro-F1 against a held-out **validation** split (the test split is never
+  used for model selection or tuning), then refit on train+validation and
+  wrapped in a `CalibratedClassifierCV` (isotonic, 5-fold internal CV) so
+  `predict_proba` outputs are probability-calibrated, not just rank-ordered.
+  On the current dataset, `RandomForest(n_estimators=200, max_depth=8)` was
+  selected. Each candidate is an `imblearn` `Pipeline` (`SMOTE` → `StandardScaler`
+  → classifier) — SMOTE oversamples the minority classes (MEDIUM, HIGH) using
+  only that fold's own training rows, never validation or test.
 - **Train/validation/test split:** grouped by `organization_id` (60/20/20) —
   no organization's contracts span more than one split, since they'd
   otherwise leak information through the shared per-org z-score baseline.
+  100 synthetic organizations (not 20) specifically so each split has enough
+  organizations (60/20/20) for stable metrics — with only 20 orgs the test
+  split had just 4, making test numbers noisy and dependent on which 4
+  happened to land there.
 - **Features (7):** `days_until_expiry`, `status_code`, `has_end_date`,
   `total_financial_amount`, `num_financial_records`, `financial_std`,
   `financial_zscore` — the same signals the rule-based score uses, plus
@@ -75,48 +82,51 @@ validated against real contract outcomes (see Limitations).
   isn't there.
 
 **Current test-set performance** (from `model/risk_model_metadata.json`,
-organization-grouped 60/20/20 split, 5,000 synthetic samples, seed 42,
-dataset generated 2026-09-05 with the sampled-label mechanism described
-below — test split touched exactly once, after model selection was final):
+organization-grouped 60/20/20 split — 60/20/20 organizations out of 100 —
+20,000 synthetic samples, seed 42, dataset generated 2026-09-05 with the
+sampled-label mechanism described below — test split touched exactly once,
+after model selection was final):
 
 | Metric | Value |
 |---|---|
-| Validation macro F1 (selection criterion) | 0.709 |
-| Test macro F1 | 0.691 |
-| Test ROC-AUC (macro OvR) | 0.902 |
-| Test Brier score (lower = better calibrated) | 0.197 |
-| Test log-loss | 0.355 |
+| Validation macro F1 (selection criterion) | 0.754 |
+| Test macro F1 | 0.720 |
+| Test ROC-AUC (macro OvR) | 0.913 |
+| Test Brier score (lower = better calibrated) | 0.193 |
+| Test log-loss | 0.342 |
 
 **Baselines, evaluated on the same test split** — the ML model must beat
 these to justify existing at all:
 
 | Baseline | Macro F1 |
 |---|---|
-| Majority-class (always predict LOW) | 0.261 |
-| Rule-based score (section 2.1, reinterpreted as a classifier) | 0.618 |
-| **ML model (this section)** | **0.691** |
+| Majority-class (always predict LOW) | 0.257 |
+| Rule-based score (section 2.1, reinterpreted as a classifier) | 0.583 |
+| **ML model (this section)** | **0.720** |
 
-The ML model beats the rule-based baseline by a modest but real margin
-(+0.07 macro F1) — a believable result for "adds some value via feature
+The ML model beats the rule-based baseline by a real, meaningful margin
+(+0.137 macro F1) — a believable result for "adds value via feature
 interactions the rule ignores," unlike the previous 0.957 which meant "can
 reproduce the rule that generated its own labels."
 
 | Class | Precision | Recall | F1 |
 |---|---|---|---|
-| LOW | 0.92 | 0.99 | 0.95 |
-| MEDIUM | 0.68 | 0.16 | 0.26 |
+| LOW | 0.94 | 0.97 | 0.96 |
+| MEDIUM | 0.56 | 0.25 | 0.35 |
 | HIGH | 0.78 | 0.95 | 0.86 |
 
-MEDIUM is by far the weakest class — by construction it sits in the
+MEDIUM is still the weakest class — by construction it sits in the
 transition zone between the two sigmoid label boundaries (see below), the
 region where the latent reliability factor has the most influence over the
-outcome and the visible features are least informative. **This is expected
-and correct, not a regression to fix**: a macro-F1 near 0.69 with a weak
-MEDIUM class is what an honestly-labeled version of this problem looks like.
-The previous version of this dataset reported 0.957 with MEDIUM recall
-0.885 — that number was measuring the model's ability to reproduce a
-deterministic rule built from the same features it was given, not
-predictive skill (see "Training data — honesty check" below).
+outcome and the visible features are least informative. SMOTE oversampling
+and a larger dataset (100 organizations, 20,000 samples, up from 20/5,000)
+lifted its F1 from 0.26 to 0.35 — a real improvement, not a full fix: this
+is a structural limit of the label mechanism, not an engineering gap to
+close further with more of the same. The previous (2026-09-05, smaller
+dataset) version of this document reported 0.957 with MEDIUM recall 0.885 —
+that number was measuring the model's ability to reproduce a deterministic
+rule built from the same features it was given, not predictive skill (see
+"Training data — honesty check" below).
 
 ## 3. Anomaly detection (`GET /anomalies`)
 
@@ -183,14 +193,16 @@ reliability factor that is never exposed to the model** (see
 the exact mechanism). Because part of what determines the true label is
 structurally invisible to the model, the ceiling for what any classifier fit
 on these 7 features can achieve is now genuinely bounded below 1.0 — the
-current macro-F1 is **0.696**, with the MEDIUM class (the hardest, sitting
-in the transition zone) at only 0.32 F1.
+current macro-F1 is **0.720**, with the MEDIUM class (the hardest, sitting
+in the transition zone) at 0.35 F1 (up from 0.26 on an earlier, smaller
+dataset, after adding SMOTE oversampling and more organizations/samples —
+still the weakest class by construction, not fully fixable this way).
 
 **In plain terms: this model has still not learned from real contract
 outcomes — no synthetic dataset can produce that — but it can no longer get
 an artificially high score by memorizing a rule built from its own features.**
-The reported 0.696 macro-F1 is a more honest number precisely because it is
-lower: it reflects how much of a partially-observable outcome can be
+The reported 0.720 macro-F1 is a more honest number precisely because it is
+lower than 0.957: it reflects how much of a partially-observable outcome can be
 recovered from 7 visible signals, which is the actual question a real
 deployment would face. Treat the ML score as a second opinion that mostly
 agrees with the rule-based score on clear-cut cases (expired, extreme

@@ -46,7 +46,11 @@ from app.services.risk_features import (  # noqa: E402
 
 STATUSES = list(STATUS_CODE.keys())  # ACTIVE, EXPIRED, CANCELLED, DRAFT
 STATUS_WEIGHTS = [0.60, 0.25, 0.10, 0.05]
-N_ORGS = 20
+# 100 organizations (not 20): train_risk_model.py splits by organization_id,
+# so too few organizations means too few groups per split - with only 20
+# orgs, the test split ends up with just ~4 organizations, and test metrics
+# become highly dependent on which 4 happened to land there.
+N_ORGS = 100
 
 # LogNormal(mu, sigma) calibrated on ANAC "forniture e servizi" open data
 # (median ~EUR 44,000, P90 ~EUR 350,000). Duplicated as plain constants here
@@ -168,7 +172,7 @@ def _assign_labels(rng: np.random.Generator, days: np.ndarray, status_code: np.n
     return np.array([rng.choice(3, p=p) for p in probs])
 
 
-def generate(n_samples: int = 5000, seed: int = 42, as_of_date: date | None = None) -> pd.DataFrame:
+def generate(n_samples: int = 20000, seed: int = 42, as_of_date: date | None = None) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     today = as_of_date or date.today()
 
@@ -226,7 +230,7 @@ def generate(n_samples: int = 5000, seed: int = 42, as_of_date: date | None = No
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate synthetic contract training data")
-    parser.add_argument("--samples", type=int, default=5000)
+    parser.add_argument("--samples", type=int, default=20000)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--as-of-date",

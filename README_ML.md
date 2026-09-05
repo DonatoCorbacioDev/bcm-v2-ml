@@ -6,7 +6,7 @@ FastAPI service providing three ML endpoints consumed by the BCM backend via a c
 
 | Endpoint | Model | Purpose |
 |----------|-------|---------|
-| `GET /risk-scores` | XGBoost / RandomForest / LogisticRegression (best by macro-F1) | Per-contract risk classification (LOW / MEDIUM / HIGH) |
+| `GET /risk-scores` | Best of 9 tuned/SMOTE-balanced candidates (LogisticRegression/RandomForest/XGBoost), calibrated | Per-contract risk classification (LOW / MEDIUM / HIGH) |
 | `GET /forecast?months=N` | Facebook Prophet | Monthly financial value forecast with 95% CI |
 | `GET /anomalies` | Isolation Forest | Flag financially anomalous records |
 
@@ -28,17 +28,25 @@ FastAPI service providing three ML endpoints consumed by the BCM backend via a c
 
 ### Training
 
+The synthetic dataset spans **100 organizations** (`scripts/generate_training_data.py::N_ORGS`)
+so the grouped split below has enough organizations per split for stable
+metrics — with only 20 orgs the test split had just 4, and test numbers
+were noisy depending on which 4 happened to land there.
+
 The dataset is split **60/20/20 (train/validation/test), grouped by
 `organization_id`** — no organization's contracts span more than one split,
 since they'd otherwise leak information through the shared per-org z-score
 baseline (`scripts/train_risk_model.py::_group_train_val_test_split`).
 
-Three candidate models are trained on the train split and evaluated with
-stratified 5-fold cross-validation plus a held-out validation score:
-
-- `LogisticRegression` (L2, C=1.0)
-- `RandomForestClassifier` (n_estimators=200, max_depth=8)
-- `XGBClassifier` (n_estimators=200, max_depth=6, learning_rate=0.1)
+**9 candidates** (3 hyperparameter variants each of Logistic Regression,
+Random Forest and XGBoost — `scripts/train_risk_model.py::_build_candidates`)
+are trained on the train split and evaluated with stratified 5-fold
+cross-validation plus a held-out validation score. Each candidate is an
+`imblearn` pipeline (`SMOTE` → `StandardScaler` → classifier): SMOTE
+oversamples the minority classes (MEDIUM, HIGH) using only that fold's own
+training rows, since imblearn's `Pipeline` (unlike scikit-learn's) skips the
+resampling step at predict time and inside `CalibratedClassifierCV`'s
+internal folds — never touching validation or test.
 
 The model with the highest **macro-F1 on validation** (never on test) is
 picked, refit on train+validation, then wrapped in a
