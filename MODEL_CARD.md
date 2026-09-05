@@ -51,11 +51,16 @@ validated against real contract outcomes (see Limitations).
 
 ### 2.2 ML score (supplementary, opt-in via trained model)
 
-- **Model:** `RandomForestClassifier` (scikit-learn, `class_weight="balanced"`),
-  chosen automatically by `scripts/train_risk_model.py` because it scored
-  highest test macro-F1 among Logistic Regression, Random Forest, and
-  XGBoost on the current synthetic dataset. Wrapped in a `Pipeline` with a
-  `StandardScaler`.
+- **Model:** best of Logistic Regression, Random Forest and XGBoost — selected
+  by `scripts/train_risk_model.py` on macro-F1 against a held-out
+  **validation** split (the test split is never used for model selection),
+  then refit on train+validation and wrapped in a `CalibratedClassifierCV`
+  (isotonic, 5-fold internal CV) so `predict_proba` outputs are
+  probability-calibrated, not just rank-ordered. On the current dataset,
+  XGBoost was selected. Each candidate is a `Pipeline` with a `StandardScaler`.
+- **Train/validation/test split:** grouped by `organization_id` (60/20/20) —
+  no organization's contracts span more than one split, since they'd
+  otherwise leak information through the shared per-org z-score baseline.
 - **Features (7):** `days_until_expiry`, `status_code`, `has_end_date`,
   `total_financial_amount`, `num_financial_records`, `financial_std`,
   `financial_zscore` — the same signals the rule-based score uses, plus
@@ -70,26 +75,43 @@ validated against real contract outcomes (see Limitations).
   isn't there.
 
 **Current test-set performance** (from `model/risk_model_metadata.json`,
-80/20 stratified split, 5,000 synthetic samples, seed 42, dataset generated
-2026-09-05 with the sampled-label mechanism described below):
+organization-grouped 60/20/20 split, 5,000 synthetic samples, seed 42,
+dataset generated 2026-09-05 with the sampled-label mechanism described
+below — test split touched exactly once, after model selection was final):
 
 | Metric | Value |
 |---|---|
-| Test macro F1 | 0.696 |
-| 5-fold CV macro F1 | 0.707 ± 0.018 |
-| Test ROC-AUC (macro OvR) | 0.894 |
+| Validation macro F1 (selection criterion) | 0.709 |
+| Test macro F1 | 0.691 |
+| Test ROC-AUC (macro OvR) | 0.902 |
+| Test Brier score (lower = better calibrated) | 0.197 |
+| Test log-loss | 0.355 |
+
+**Baselines, evaluated on the same test split** — the ML model must beat
+these to justify existing at all:
+
+| Baseline | Macro F1 |
+|---|---|
+| Majority-class (always predict LOW) | 0.261 |
+| Rule-based score (section 2.1, reinterpreted as a classifier) | 0.618 |
+| **ML model (this section)** | **0.691** |
+
+The ML model beats the rule-based baseline by a modest but real margin
+(+0.07 macro F1) — a believable result for "adds some value via feature
+interactions the rule ignores," unlike the previous 0.957 which meant "can
+reproduce the rule that generated its own labels."
 
 | Class | Precision | Recall | F1 |
 |---|---|---|---|
-| LOW | 0.94 | 0.97 | 0.95 |
-| MEDIUM | 0.41 | 0.27 | 0.32 |
-| HIGH | 0.76 | 0.86 | 0.81 |
+| LOW | 0.92 | 0.99 | 0.95 |
+| MEDIUM | 0.68 | 0.16 | 0.26 |
+| HIGH | 0.78 | 0.95 | 0.86 |
 
 MEDIUM is by far the weakest class — by construction it sits in the
 transition zone between the two sigmoid label boundaries (see below), the
 region where the latent reliability factor has the most influence over the
 outcome and the visible features are least informative. **This is expected
-and correct, not a regression to fix**: a macro-F1 near 0.70 with a weak
+and correct, not a regression to fix**: a macro-F1 near 0.69 with a weak
 MEDIUM class is what an honestly-labeled version of this problem looks like.
 The previous version of this dataset reported 0.957 with MEDIUM recall
 0.885 — that number was measuring the model's ability to reproduce a

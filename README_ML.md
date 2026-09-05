@@ -28,13 +28,27 @@ FastAPI service providing three ML endpoints consumed by the BCM backend via a c
 
 ### Training
 
-Three candidate models are trained on the same dataset and evaluated with stratified 5-fold cross-validation:
+The dataset is split **60/20/20 (train/validation/test), grouped by
+`organization_id`** — no organization's contracts span more than one split,
+since they'd otherwise leak information through the shared per-org z-score
+baseline (`scripts/train_risk_model.py::_group_train_val_test_split`).
+
+Three candidate models are trained on the train split and evaluated with
+stratified 5-fold cross-validation plus a held-out validation score:
 
 - `LogisticRegression` (L2, C=1.0)
 - `RandomForestClassifier` (n_estimators=200, max_depth=8)
 - `XGBClassifier` (n_estimators=200, max_depth=6, learning_rate=0.1)
 
-The model with the highest **macro-F1** on the held-out test set (20% stratified split) is serialized to `model/risk_model.joblib` and loaded at service startup.
+The model with the highest **macro-F1 on validation** (never on test) is
+picked, refit on train+validation, then wrapped in a
+`CalibratedClassifierCV` (isotonic, 5-fold internal CV) so its predicted
+probabilities are calibrated, not just rank-ordered. The **test split is
+evaluated exactly once**, after model selection is already final, against
+two baselines (majority-class and the existing rule-based score) reported
+alongside it — see
+[MODEL_CARD.md](./MODEL_CARD.md#22-ml-score-supplementary-opt-in-via-trained-model)
+for current numbers.
 
 Labels are **sampled**, not assigned by a hard threshold, during synthetic
 data generation (`scripts/generate_training_data.py::_assign_labels` — the

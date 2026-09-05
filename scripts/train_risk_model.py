@@ -2,8 +2,11 @@
 Train and evaluate the ML risk scoring model.
 
 Reads data/synthetic_contracts.csv (generate it first with generate_training_data.py).
-Trains Logistic Regression, Random Forest and XGBoost, reports precision/recall/F1/ROC-AUC,
-and saves the best model (by test macro F1) to model/risk_model.joblib.
+Trains Logistic Regression, Random Forest and XGBoost, selects the best one
+by macro-F1 on a held-out VALIDATION split (never the test split), calibrates
+its probabilities, and reports final metrics against two baselines
+(majority-class and the existing rule-based score) on the TEST split -
+touched exactly once, after model selection is already final.
 
 Run:
     python scripts/generate_training_data.py
@@ -17,12 +20,14 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import classification_report, f1_score, roc_auc_score
-from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
+from sklearn.metrics import classification_report, f1_score, log_loss, roc_auc_score
+from sklearn.model_selection import GroupShuffleSplit, StratifiedKFold, cross_val_score
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, label_binarize
 from xgboost import XGBClassifier
 
 # app/ is a sibling package, not installed — make it importable so FEATURES/
@@ -62,35 +67,74 @@ def _build_pipelines() -> dict:
     }
 
 
-def _evaluate(name: str, pipeline: Pipeline, X_train, X_test, y_train, y_test) -> dict:
-    print(f"\n{'=' * 50}")
-    print(f"  {name}")
-    print(f"{'=' * 50}")
+def _group_train_val_test_split(X, y, groups, val_size=0.20, test_size=0.20, seed=42):
+    """Splits by `groups` (organization_id) so no organization's contracts
+    appear in more than one split - a random per-row split would leak
+    information between splits via the shared org-level z-score baseline."""
+    gss_test = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=seed)
+    train_val_idx, test_idx = next(gss_test.split(X, y, groups))
 
-    # Cross-validation (macro F1) on training set
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-    cv_scores = cross_val_score(pipeline, X_train, y_train, cv=cv, scoring="f1_macro", n_jobs=-1)
-    print(f"CV macro F1 (5-fold): {cv_scores.mean():.4f} ± {cv_scores.std():.4f}")
+    relative_val_size = val_size / (1.0 - test_size)
+    gss_val = GroupShuffleSplit(n_splits=1, test_size=relative_val_size, random_state=seed)
+    train_rel_idx, val_rel_idx = next(
+        gss_val.split(X[train_val_idx], y[train_val_idx], groups[train_val_idx])
+    )
+    train_idx = train_val_idx[train_rel_idx]
+    val_idx = train_val_idx[val_rel_idx]
+    return train_idx, val_idx, test_idx
 
-    # Fit on full train, evaluate on test
-    pipeline.fit(X_train, y_train)
-    y_pred = pipeline.predict(X_test)
-    y_prob = pipeline.predict_proba(X_test)
 
-    print("\nTest set — classification report:")
-    print(classification_report(y_test, y_pred, target_names=CLASS_NAMES))
+def _rule_based_baseline_predict(X: np.ndarray) -> np.ndarray:
+    """Reimplements app/services/risk_scoring.py's deterministic rule
+    (0.6*expiry_score + 0.4*min(|z|/3, 1) -> HIGH/MEDIUM/LOW) directly on
+    feature rows, as a baseline the trained model must actually beat. Not
+    imported from risk_scoring.py, which pulls in the SQLAlchemy models/DB
+    config this standalone script must not depend on - if the production
+    rule's weights/thresholds ever change, update both by hand."""
+    days = X[:, FEATURES.index("days_until_expiry")]
+    has_end_date = X[:, FEATURES.index("has_end_date")]
+    z = X[:, FEATURES.index("financial_zscore")]
 
+    expiry_score = np.select(
+        [has_end_date == 0, days < 0, days < 30, days < 90, days < 180],
+        [0.3, 1.0, 0.8, 0.5, 0.3],
+        default=0.1,
+    )
+    value_score = np.minimum(np.abs(z) / 3.0, 1.0)
+    risk_score = 0.6 * expiry_score + 0.4 * value_score
+
+    labels = np.zeros(len(X), dtype=int)
+    labels[risk_score >= 0.35] = 1
+    labels[risk_score >= 0.65] = 2
+    return labels
+
+
+def _report_baseline(name: str, y_pred: np.ndarray, y_test: np.ndarray) -> dict:
     macro_f1 = f1_score(y_test, y_pred, average="macro")
-    roc_auc = roc_auc_score(y_test, y_prob, multi_class="ovr", average="macro")
-    print(f"ROC-AUC (macro OvR): {roc_auc:.4f}")
+    print(f"\n{name} baseline — macro F1: {macro_f1:.4f}")
+    print(classification_report(y_test, y_pred, target_names=CLASS_NAMES, zero_division=0))
+    return {"macro_f1": float(macro_f1)}
 
-    return {
-        "cv_macro_f1_mean": float(cv_scores.mean()),
-        "cv_macro_f1_std": float(cv_scores.std()),
-        "test_macro_f1": float(macro_f1),
-        "test_roc_auc": float(roc_auc),
-        "report": classification_report(y_test, y_pred, target_names=CLASS_NAMES, output_dict=True),
-    }
+
+def _select_best_on_validation(pipelines: dict, X_train, y_train, X_val, y_val) -> tuple[str, dict]:
+    print(f"\n{'=' * 60}\n  MODEL SELECTION (on validation split, test untouched)\n{'=' * 60}")
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    scores = {}
+    for name, pipeline in pipelines.items():
+        cv_scores = cross_val_score(pipeline, X_train, y_train, cv=cv, scoring="f1_macro", n_jobs=-1)
+        pipeline.fit(X_train, y_train)
+        val_f1 = f1_score(y_val, pipeline.predict(X_val), average="macro")
+        scores[name] = {
+            "cv_macro_f1_mean": float(cv_scores.mean()),
+            "cv_macro_f1_std": float(cv_scores.std()),
+            "val_macro_f1": float(val_f1),
+        }
+        print(f"{name:<20} CV macro F1: {cv_scores.mean():.4f} ± {cv_scores.std():.4f}   "
+              f"Validation macro F1: {val_f1:.4f}")
+
+    best_name = max(scores, key=lambda k: scores[k]["val_macro_f1"])
+    print(f"\nSelected: {best_name} (highest validation macro F1)")
+    return best_name, scores
 
 
 def main() -> None:
@@ -106,50 +150,83 @@ def main() -> None:
 
     X = df[FEATURES].to_numpy(dtype=float)
     y = df["risk_level"].to_numpy(dtype=int)
+    groups = df["organization_id"].to_numpy()
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.20, random_state=42, stratify=y
+    train_idx, val_idx, test_idx = _group_train_val_test_split(X, y, groups)
+    X_train, y_train = X[train_idx], y[train_idx]
+    X_val, y_val = X[val_idx], y[val_idx]
+    X_test, y_test = X[test_idx], y[test_idx]
+    print(
+        f"Train: {len(X_train):,} ({df.iloc[train_idx]['organization_id'].nunique()} orgs)  |  "
+        f"Validation: {len(X_val):,} ({df.iloc[val_idx]['organization_id'].nunique()} orgs)  |  "
+        f"Test: {len(X_test):,} ({df.iloc[test_idx]['organization_id'].nunique()} orgs)"
     )
-    print(f"Train: {len(X_train):,}  |  Test: {len(X_test):,}")
 
+    # --- Baselines, evaluated on test exactly like the final model ---
+    print(f"\n{'=' * 60}\n  BASELINES\n{'=' * 60}")
+    majority = DummyClassifier(strategy="most_frequent", random_state=42)
+    majority.fit(X_train, y_train)
+    baselines = {
+        "majority_class": _report_baseline("Majority-class", majority.predict(X_test), y_test),
+        "rule_based": _report_baseline("Rule-based (risk_scoring.py)", _rule_based_baseline_predict(X_test), y_test),
+    }
+
+    # --- Model selection on validation, test never touched until the end ---
     pipelines = _build_pipelines()
-    results = {}
-    for name, pipeline in pipelines.items():
-        results[name] = _evaluate(name, pipeline, X_train, X_test, y_train, y_test)
-        results[name]["pipeline"] = pipeline
+    best_name, selection_scores = _select_best_on_validation(pipelines, X_train, y_train, X_val, y_val)
 
-    # Pick best by test macro F1
-    best_name = max(
-        (k for k in results if k != "pipeline"),
-        key=lambda k: results[k]["test_macro_f1"],
-    )
-    best = results[best_name]
+    # Refit the winner on train+validation (more data for the final model)
+    # then calibrate its probabilities via internal cross-validation on that
+    # same combined set - calibration never sees the test split either.
+    X_train_val = np.concatenate([X_train, X_val])
+    y_train_val = np.concatenate([y_train, y_val])
+    best_pipeline = _build_pipelines()[best_name]
+    calibrated = CalibratedClassifierCV(best_pipeline, method="isotonic", cv=5)
+    calibrated.fit(X_train_val, y_train_val)
 
-    print(f"\n{'=' * 50}")
-    print(f"  Best model: {best_name}")
-    print(f"  Test macro F1 : {best['test_macro_f1']:.4f}")
-    print(f"  Test ROC-AUC  : {best['test_roc_auc']:.4f}")
-    print(f"{'=' * 50}\n")
+    # --- Final evaluation, on test, exactly once ---
+    print(f"\n{'=' * 60}\n  FINAL MODEL: {best_name} (calibrated) — TEST SET\n{'=' * 60}")
+    y_pred = calibrated.predict(X_test)
+    y_prob = calibrated.predict_proba(X_test)
+
+    print(classification_report(y_test, y_pred, target_names=CLASS_NAMES))
+    macro_f1 = f1_score(y_test, y_pred, average="macro")
+    roc_auc = roc_auc_score(y_test, y_prob, multi_class="ovr", average="macro")
+    y_test_binarized = label_binarize(y_test, classes=list(range(len(CLASS_NAMES))))
+    brier = float(np.mean(np.sum((y_prob - y_test_binarized) ** 2, axis=1)))
+    logloss = float(log_loss(y_test, y_prob, labels=list(range(len(CLASS_NAMES)))))
+    print(f"Test macro F1  : {macro_f1:.4f}")
+    print(f"Test ROC-AUC   : {roc_auc:.4f}")
+    print(f"Test Brier     : {brier:.4f}  (lower is better, 0 = perfect calibration)")
+    print(f"Test log-loss  : {logloss:.4f}")
+    print(f"\nBaselines for comparison — majority-class F1: {baselines['majority_class']['macro_f1']:.4f}, "
+          f"rule-based F1: {baselines['rule_based']['macro_f1']:.4f}")
+
+    report = classification_report(y_test, y_pred, target_names=CLASS_NAMES, output_dict=True)
 
     MODEL_DIR.mkdir(exist_ok=True)
-    joblib.dump(best["pipeline"], MODEL_PATH)
-    print(f"Model saved -> {MODEL_PATH}")
+    joblib.dump(calibrated, MODEL_PATH)
+    print(f"\nModel saved -> {MODEL_PATH}")
 
     metadata = {
-        "model_name": best_name,
+        "model_name": f"{best_name} (isotonic-calibrated)",
         "features": FEATURES,
         "classes": CLASS_NAMES,
         "train_samples": len(X_train),
+        "validation_samples": len(X_val),
         "test_samples": len(X_test),
-        "cv_macro_f1_mean": best["cv_macro_f1_mean"],
-        "cv_macro_f1_std": best["cv_macro_f1_std"],
-        "test_macro_f1": best["test_macro_f1"],
-        "test_roc_auc": best["test_roc_auc"],
+        "split": "grouped by organization_id (no organization spans more than one split)",
+        "model_selection": selection_scores,
+        "baselines": baselines,
+        "test_macro_f1": float(macro_f1),
+        "test_roc_auc": float(roc_auc),
+        "test_brier_score": brier,
+        "test_log_loss": logloss,
         "per_class": {
             cls: {
-                "precision": best["report"][cls]["precision"],
-                "recall": best["report"][cls]["recall"],
-                "f1": best["report"][cls]["f1-score"],
+                "precision": report[cls]["precision"],
+                "recall": report[cls]["recall"],
+                "f1": report[cls]["f1-score"],
             }
             for cls in CLASS_NAMES
         },

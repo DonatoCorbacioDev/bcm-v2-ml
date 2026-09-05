@@ -215,6 +215,11 @@ def generate(n_samples: int = 5000, seed: int = 42, as_of_date: date | None = No
     z = df["financial_zscore"].to_numpy()
     labels = _assign_labels(rng, days, status_code, z)
 
+    # Not a model feature - kept only so train_risk_model.py can split
+    # train/validation/test by organization instead of by row (a random
+    # per-row split would let contracts from the same organization leak
+    # across splits via the shared org-level z-score baseline).
+    df["organization_id"] = [c.organization_id for c in contracts]
     df["risk_level"] = labels.astype(int)
     return df
 

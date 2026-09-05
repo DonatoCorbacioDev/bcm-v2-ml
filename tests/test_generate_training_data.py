@@ -33,9 +33,9 @@ class TestGenerate:
         df = generate(n_samples=200, seed=1, as_of_date=AS_OF)
         assert len(df) == 200
 
-    def test_columns_match_shared_features_plus_label(self):
+    def test_columns_match_shared_features_plus_org_and_label(self):
         df = generate(n_samples=50, seed=1, as_of_date=AS_OF)
-        assert list(df.columns) == [*FEATURES, "risk_level"]
+        assert list(df.columns) == [*FEATURES, "organization_id", "risk_level"]
 
     def test_deterministic_for_same_seed_and_as_of_date(self):
         df1 = generate(n_samples=300, seed=7, as_of_date=AS_OF)
