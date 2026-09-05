@@ -100,6 +100,16 @@ def _format_risk_scores(risk_scores: list) -> str:
     return "\n".join(lines)
 
 
+def _format_amount(value: float) -> str:
+    """Round to the nearest euro and use a thousands separator, so the model
+    is given a short, clean token to copy instead of a long raw float (e.g.
+    "45.231" instead of "45230.567891...") - small local models garble long
+    unformatted numbers far more often than short clean ones. Italian-style
+    "." thousands separator matches settings.REPORT_LANGUAGE=italian, so it
+    doesn't collide with Italian's own "," decimal separator convention."""
+    return f"{round(value):,}".replace(",", ".")
+
+
 def _format_forecast(forecast: dict) -> str:
     historical = forecast.get("historical", [])
     forecast_months = forecast.get("forecast", [])
@@ -110,12 +120,13 @@ def _format_forecast(forecast: dict) -> str:
     lines = []
     if historical:
         recent = historical[-3:]
-        recent_str = ", ".join(f"{h['month']}: {h['amount']}" for h in recent)
+        recent_str = ", ".join(f"{h['month']}: {_format_amount(h['amount'])}" for h in recent)
         lines.append(f"Recent months: {recent_str}")
 
     if forecast_months:
         forecast_str = ", ".join(
-            f"{f['month']}: {f['amount']} (range {f['lower']}-{f['upper']})"
+            f"{f['month']}: {_format_amount(f['amount'])} "
+            f"(range {_format_amount(f['lower'])}-{_format_amount(f['upper'])})"
             for f in forecast_months
         )
         lines.append(f"Forecast: {forecast_str}")
@@ -134,7 +145,9 @@ def _build_prompt(risk_scores: list, forecast: dict, language: str) -> str:
         f"Write a concise report with three sections: "
         f"1) the highest-risk contracts and why, "
         f"2) the financial trend for the upcoming months, "
-        f"3) recommended actions."
+        f"3) recommended actions. "
+        f"When you mention any amount or score, copy the exact digits given above "
+        f"verbatim - never recalculate, round differently, or retype a number from memory."
     )
 
 

@@ -3,8 +3,8 @@ from unittest.mock import MagicMock, patch
 import httpx
 
 from app.services.agent import (
-    _build_prompt, _call_ollama, _call_ollama_chat, _format_forecast, _format_risk_scores,
-    _run_tool, ask_agent, generate_insights,
+    _build_prompt, _call_ollama, _call_ollama_chat, _format_amount, _format_forecast,
+    _format_risk_scores, _run_tool, ask_agent, generate_insights,
 )
 
 
@@ -41,6 +41,16 @@ def test_format_risk_scores_limits_to_top_n():
     assert result.count("Org") == 5
 
 
+# ── _format_amount ────────────────────────────────────────────────────────────
+
+def test_format_amount_rounds_and_uses_thousands_separator():
+    assert _format_amount(45230.567891) == "45.231"
+
+
+def test_format_amount_small_value_no_separator():
+    assert _format_amount(500.0) == "500"
+
+
 # ── _format_forecast ──────────────────────────────────────────────────────────
 
 def test_format_forecast_empty():
@@ -55,7 +65,16 @@ def test_format_forecast_with_data():
     result = _format_forecast(forecast)
     assert "2024-01" in result
     assert "2024-02" in result
-    assert "900.0-1300.0" in result
+    assert "900-1.300" in result
+
+
+def test_format_forecast_cleans_up_long_raw_floats():
+    # The actual bug being fixed: a long raw float is exactly what a small
+    # local LLM garbles most often - the formatted string must be short and clean.
+    forecast = {"historical": [{"month": "2024-01", "amount": 45230.567891234}], "forecast": []}
+    result = _format_forecast(forecast)
+    assert "45.231" in result
+    assert "567891" not in result
 
 
 # ── _build_prompt ──────────────────────────────────────────────────────────────
