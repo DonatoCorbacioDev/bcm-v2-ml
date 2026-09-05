@@ -5,9 +5,9 @@ Loads a pre-trained scikit-learn Pipeline from model/risk_model.joblib at first 
 If the model file is not present (training script not yet run), all methods return
 empty results and the router falls back to rule-based scores only.
 
-Features used (must match scripts/generate_training_data.py):
-  days_until_expiry, status_code, has_end_date, total_financial_amount,
-  num_financial_records, financial_std, financial_zscore
+Feature computation lives in risk_features.build_feature_row — the same
+function scripts/generate_training_data.py calls to build training rows, so
+this module and the training pipeline can't compute features differently.
 """
 
 import logging
@@ -19,13 +19,12 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..models import Contract, FinancialValue
+from .risk_features import STATUS_CODE, LEVEL_MAP, build_feature_row
+from .risk_features import build_org_stats as _build_org_stats
 
 logger = logging.getLogger(__name__)
 
 MODEL_PATH = Path(__file__).parent.parent.parent / "model" / "risk_model.joblib"
-
-STATUS_CODE = {"ACTIVE": 0, "EXPIRED": 1, "CANCELLED": 2, "DRAFT": 3}
-LEVEL_MAP = {0: "LOW", 1: "MEDIUM", 2: "HIGH"}
 
 _model = None
 _model_loaded = False
@@ -53,30 +52,22 @@ def _build_feature_matrix(
     contract_stds: dict,
     contract_counts: dict,
     org_stats: dict,
+    today: date | None = None,
 ) -> np.ndarray:
-    today = date.today()
-    rows = []
-    for c in contracts:
-        if c.end_date is not None:
-            days = float((c.end_date - today).days)
-            has_end_date = 1.0
-        else:
-            days = 365.0
-            has_end_date = 0.0
-
-        status_code = float(STATUS_CODE.get(str(c.status), 0))
-        total = float(contract_totals.get(c.id, 0.0))
-        std = float(contract_stds.get(c.id, 0.0))
-        count = float(contract_counts.get(c.id, 0))
-
-        if c.organization_id in org_stats:
-            mean, ostd = org_stats[c.organization_id]
-            z = (total - mean) / ostd
-        else:
-            z = 0.0
-
-        rows.append([days, status_code, has_end_date, total, count, std, z])
-
+    today = today or date.today()
+    rows = [
+        build_feature_row(
+            c.end_date,
+            c.status,
+            contract_totals.get(c.id, 0.0),
+            contract_counts.get(c.id, 0),
+            contract_stds.get(c.id, 0.0),
+            c.organization_id,
+            org_stats,
+            today,
+        )
+        for c in contracts
+    ]
     return np.array(rows, dtype=float) if rows else np.empty((0, 7))
 
 
@@ -117,15 +108,9 @@ def compute_ml_risk_scores(db: Session, org_id: int | None = None, manager_id: i
     contract_stds = {r.contract_id: float(r.std or 0.0) for r in fv_rows}
     contract_counts = {r.contract_id: int(r.count or 0) for r in fv_rows}
 
-    # org-level stats for z-score
-    org_amounts: dict = {}
-    for c in contracts:
-        org_amounts.setdefault(c.organization_id, []).append(contract_totals.get(c.id, 0.0))
-    org_stats = {}
-    for oid, amounts in org_amounts.items():
-        arr = np.array(amounts, dtype=float)
-        std = float(np.std(arr, ddof=1)) if len(arr) > 1 else 1.0
-        org_stats[oid] = (float(np.mean(arr)), max(std, 1e-9))
+    # org-level stats for z-score (shared with the rule-based scorer so the
+    # two never compute this differently — see risk_scoring._build_org_stats)
+    org_stats = _build_org_stats(contracts, contract_totals)
 
     X = _build_feature_matrix(contracts, contract_totals, contract_stds, contract_counts, org_stats)
 

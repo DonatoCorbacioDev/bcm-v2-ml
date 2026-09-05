@@ -11,6 +11,7 @@ Run:
 """
 
 import json
+import sys
 from pathlib import Path
 
 import joblib
@@ -24,21 +25,15 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
 
+# app/ is a sibling package, not installed — make it importable so FEATURES/
+# CLASS_NAMES can't drift from what ml_risk_scoring.py uses at serving time.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from app.services.risk_features import FEATURES, CLASS_NAMES  # noqa: E402
+
 DATA_PATH = Path(__file__).parent.parent / "data" / "synthetic_contracts.csv"
 MODEL_DIR = Path(__file__).parent.parent / "model"
 MODEL_PATH = MODEL_DIR / "risk_model.joblib"
 META_PATH = MODEL_DIR / "risk_model_metadata.json"
-
-FEATURES = [
-    "days_until_expiry",
-    "status_code",
-    "has_end_date",
-    "total_financial_amount",
-    "num_financial_records",
-    "financial_std",
-    "financial_zscore",
-]
-CLASS_NAMES = ["LOW", "MEDIUM", "HIGH"]
 
 
 def _build_pipelines() -> dict:

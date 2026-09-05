@@ -1,10 +1,10 @@
 from datetime import date
 
-import numpy as np
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..models import Contract, FinancialValue
+from .risk_features import build_org_stats as _build_org_stats
 
 
 def _expiry_score(end_date) -> tuple[float, list[str]]:
@@ -37,18 +37,6 @@ def _level(score: float) -> str:
     if score >= 0.35:
         return "MEDIUM"
     return "LOW"
-
-
-def _build_org_stats(contracts: list, contract_totals: dict) -> dict:
-    org_amounts: dict = {}
-    for c in contracts:
-        org_amounts.setdefault(c.organization_id, []).append(contract_totals.get(c.id, 0.0))
-    stats = {}
-    for org_id, amounts in org_amounts.items():
-        arr = np.array(amounts, dtype=float)
-        std = float(np.std(arr, ddof=1)) if len(arr) > 1 else 1.0
-        stats[org_id] = (float(np.mean(arr)), std if std > 0 else 1.0)
-    return stats
 
 
 def compute_risk_scores(db: Session, org_id: int | None = None, manager_id: int | None = None) -> list:
