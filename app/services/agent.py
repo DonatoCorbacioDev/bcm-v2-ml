@@ -147,7 +147,11 @@ def _build_prompt(risk_scores: list, forecast: dict, language: str) -> str:
         f"2) the financial trend for the upcoming months, "
         f"3) recommended actions. "
         f"When you mention any amount or score, copy the exact digits given above "
-        f"verbatim - never recalculate, round differently, or retype a number from memory."
+        f"verbatim - never recalculate, round differently, or retype a number from memory. "
+        f"Write like a professional financial analyst addressing a colleague directly: "
+        f"plain, specific sentences, no filler phrases ('it is important to note', "
+        f"'we remind you that'), no restating the same point twice in different words, "
+        f"no generic advice that isn't tied to a specific contract or number above."
     )
 
 
