@@ -224,9 +224,9 @@ band — not as independently-validated risk prediction.
   or used as grounds for contract termination without human review.
 - Any real-world validation of accuracy. Until the model is trained on real
   labeled outcomes (see [docs/research/dataset_sources.md](./docs/research/dataset_sources.md)
-  for candidate sources), the 95.7% F1 above describes agreement with a
-  synthetic rule, not real-world predictive accuracy — do not quote it as
-  the latter.
+  for candidate sources), the 0.720 macro-F1 above describes how well the
+  model recovers a synthetic, partially-latent label mechanism, not
+  real-world predictive accuracy — do not quote it as the latter.
 
 ## When to retrain
 
