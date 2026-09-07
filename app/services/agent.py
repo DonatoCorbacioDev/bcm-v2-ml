@@ -232,7 +232,7 @@ def _propose_reminder(
         "proposedAction": {
             "type": "CREATE_REMINDER",
             "contractId": contract.id,
-            "customerName": contract.customer_name,
+            "customerName": contract.counterparty.name if contract.counterparty else None,
             "message": message,
         }
     }

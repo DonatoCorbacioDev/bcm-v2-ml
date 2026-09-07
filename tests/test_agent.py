@@ -380,10 +380,15 @@ def test_ask_agent_handles_malformed_json_on_forced_final_call():
 
 # ── _run_tool("propose_reminder") / _propose_reminder ─────────────────────────
 
+class CounterpartyMock:
+    def __init__(self, name):
+        self.name = name
+
+
 class ContractMock:
     def __init__(self, id, customer_name):
         self.id = id
-        self.customer_name = customer_name
+        self.counterparty = CounterpartyMock(customer_name) if customer_name else None
 
 
 def test_propose_reminder_requires_contract_id_and_message():

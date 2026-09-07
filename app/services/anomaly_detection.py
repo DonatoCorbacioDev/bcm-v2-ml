@@ -13,7 +13,7 @@ from sklearn.ensemble import IsolationForest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import Contract, FinancialValue
+from ..models import Contract, Counterparty, FinancialValue
 
 _MIN_RECORDS = 5
 _CONTAMINATION = 0.1
@@ -45,9 +45,10 @@ def compute_anomalies(db: Session, org_id: int | None = None, manager_id: int | 
             FinancialValue.month_value,
             FinancialValue.year_value,
             FinancialValue.financial_amount,
-            Contract.customer_name,
+            Counterparty.name.label("customer_name"),
         )
         .join(Contract, FinancialValue.contract_id == Contract.id)
+        .join(Counterparty, Contract.counterparty_id == Counterparty.id)
     )
     if manager_id is not None:
         stmt = stmt.where(Contract.manager_id == manager_id)

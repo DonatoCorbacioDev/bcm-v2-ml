@@ -51,6 +51,7 @@ from sqlalchemy import (
     MetaData,
     String,
     Table,
+    bindparam,
     insert,
     text,
 )
@@ -118,11 +119,20 @@ PROJECT_WORDS = [
 
 metadata = MetaData()
 
+counterparties_table = Table(
+    "counterparties",
+    metadata,
+    Column("id", BigInteger, primary_key=True),
+    Column("name", String(255)),
+    Column("type", String(10)),
+    Column("organization_id", BigInteger),
+)
+
 contracts_table = Table(
     "contracts",
     metadata,
     Column("id", BigInteger, primary_key=True),
-    Column("customer_name", String(255)),
+    Column("counterparty_id", BigInteger),
     Column("contract_number", String(255)),
     Column("wbs_code", String(50)),
     Column("project_name", String(100)),
@@ -328,11 +338,39 @@ def reset_org_synthetic_data(conn, org_id):
         ),
         {"oid": org_id, "prefix": f"{SYN_PREFIX}{org_id:02d}-%"},
     )
+    # Snapshot which counterparties this reset's contracts point to before
+    # deleting the contracts -- deleting them first would lose that link.
+    counterparty_ids = [
+        row[0] for row in conn.execute(
+            text(
+                "SELECT counterparty_id FROM contracts "
+                "WHERE organization_id = :oid AND contract_number LIKE :prefix"
+            ),
+            {"oid": org_id, "prefix": f"{SYN_PREFIX}{org_id:02d}-%"},
+        ).all()
+    ]
     result = conn.execute(
         text("DELETE FROM contracts WHERE organization_id = :oid AND contract_number LIKE :prefix"),
         {"oid": org_id, "prefix": f"{SYN_PREFIX}{org_id:02d}-%"},
     )
+    _delete_orphaned_counterparties(conn, org_id, counterparty_ids)
     return result.rowcount
+
+
+def _delete_orphaned_counterparties(conn, org_id, counterparty_ids):
+    """Deletes counterparties from `counterparty_ids` that no longer have any
+    contract pointing at them, scoped to org_id. Each synthetic contract gets
+    its own freshly-created counterparty (see seed_organization), so without
+    this a reset/wipe run on a schedule accumulates orphaned rows forever."""
+    if not counterparty_ids:
+        return
+    conn.execute(
+        text(
+            "DELETE FROM counterparties WHERE organization_id = :oid AND id IN :ids "
+            "AND id NOT IN (SELECT counterparty_id FROM contracts WHERE counterparty_id IS NOT NULL)"
+        ).bindparams(bindparam("ids", expanding=True)),
+        {"oid": org_id, "ids": counterparty_ids},
+    )
 
 
 def wipe_org_data(conn, org_id):
@@ -373,9 +411,16 @@ def wipe_org_data(conn, org_id):
         ),
         {"oid": org_id},
     )
+    counterparty_ids = [
+        row[0] for row in conn.execute(
+            text("SELECT counterparty_id FROM contracts WHERE organization_id = :oid"),
+            {"oid": org_id},
+        ).all()
+    ]
     contracts_deleted = conn.execute(
         text("DELETE FROM contracts WHERE organization_id = :oid"), {"oid": org_id}
     ).rowcount
+    _delete_orphaned_counterparties(conn, org_id, counterparty_ids)
     budgets_deleted = conn.execute(
         text("DELETE FROM budgets WHERE organization_id = :oid"), {"oid": org_id}
     ).rowcount
@@ -428,8 +473,17 @@ def seed_organization(conn, rng, np_rng, org, areas, type_ids, args, today, star
         start_date = random_start_date(rng, today, status)
         end_date = build_end_date(rng, status, start_date, today)
 
+        counterparty_result = conn.execute(
+            insert(counterparties_table).values(
+                name=random_company_name(rng),
+                type="CUSTOMER",
+                organization_id=org["id"],
+            )
+        )
+        counterparty_id = counterparty_result.inserted_primary_key[0]
+
         contract_values = {
-            "customer_name": random_company_name(rng),
+            "counterparty_id": counterparty_id,
             "contract_number": f"{SYN_PREFIX}{org['id']:02d}-{seq:04d}",
             "wbs_code": f"WBS-{rng.randint(1000, 9999)}" if rng.random() < 0.7 else None,
             "project_name": random_project_name(rng, area["name"]),

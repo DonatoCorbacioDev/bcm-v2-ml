@@ -69,7 +69,7 @@ def compute_risk_scores(db: Session, org_id: int | None = None, manager_id: int 
         risk_score = round(0.6 * expiry + 0.4 * min(abs(z) / 3.0, 1.0), 4)
         results.append({
             "contractId": c.id,
-            "customerName": c.customer_name,
+            "customerName": c.counterparty.name if c.counterparty else None,
             "riskScore": risk_score,
             "level": _level(risk_score),
             "anomalies": expiry_anomalies + value_anomalies,

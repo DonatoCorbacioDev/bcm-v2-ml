@@ -5,10 +5,15 @@ from app.services.risk_scoring import (
 )
 
 
+class CounterpartyMock:
+    def __init__(self, name):
+        self.name = name
+
+
 class ContractMock:
     def __init__(self, id, name, end_date, org_id):
         self.id = id
-        self.customer_name = name
+        self.counterparty = CounterpartyMock(name)
         self.end_date = end_date
         self.organization_id = org_id
 
