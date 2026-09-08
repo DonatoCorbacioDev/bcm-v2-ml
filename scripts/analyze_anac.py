@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2025 Donato Corbacio. All rights reserved.
+# Licensed under the terms of the LICENSE file at the repository root.
+
 """
 Analyze ANAC (Autorità Nazionale Anticorruzione) open-data CSV files and
 extract statistical calibration parameters for the BCM synthetic data generator.

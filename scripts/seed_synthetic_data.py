@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2025 Donato Corbacio. All rights reserved.
+# Licensed under the terms of the LICENSE file at the repository root.
+
 """Seed the shared bcm MySQL database with synthetic contracts and financial
 values, so /forecast and /risk-scores have realistic data to work with.
 

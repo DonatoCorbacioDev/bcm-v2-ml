@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Donato Corbacio. All rights reserved.
+# Licensed under the terms of the LICENSE file at the repository root.
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from .config import settings
