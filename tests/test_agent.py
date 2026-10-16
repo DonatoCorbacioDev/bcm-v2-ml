@@ -41,6 +41,33 @@ def test_format_risk_scores_limits_to_top_n():
     assert result.count("Org") == 5
 
 
+def test_format_risk_scores_notes_remaining_high_risk_contracts():
+    # 7 HIGH: 5 are shown by name, the other 2 must still be surfaced -
+    # silently dropping a HIGH contract from the report is not acceptable
+    # just because it didn't make the top 5 by score.
+    risk_scores = [
+        {"contractId": i, "customerName": f"Org{i}", "riskScore": 1.0 - i * 0.01, "level": "HIGH", "anomalies": []}
+        for i in range(7)
+    ]
+    result = _format_risk_scores(risk_scores)
+    assert "2 more HIGH-risk contract(s) not shown above" in result
+
+
+def test_format_risk_scores_no_note_when_overflow_is_not_high():
+    # 5 HIGH shown + 2 LOW cut off: omitting a LOW contract is fine (see
+    # scripts/eval_agent_insights.py's name_coverage for the same rule), so
+    # no "more HIGH-risk" note should appear.
+    risk_scores = [
+        {"contractId": i, "customerName": f"Org{i}", "riskScore": 1.0 - i * 0.01, "level": "HIGH", "anomalies": []}
+        for i in range(5)
+    ] + [
+        {"contractId": 50 + i, "customerName": f"Low{i}", "riskScore": 0.1, "level": "LOW", "anomalies": []}
+        for i in range(2)
+    ]
+    result = _format_risk_scores(risk_scores)
+    assert "more HIGH-risk" not in result
+
+
 # ── _format_amount ────────────────────────────────────────────────────────────
 
 def test_format_amount_rounds_and_uses_thousands_separator():

@@ -93,13 +93,27 @@ def _format_risk_scores(risk_scores: list) -> str:
     if not risk_scores:
         return "No contracts found."
 
+    shown = risk_scores[:TOP_RISK_CONTRACTS]
     lines = []
-    for item in risk_scores[:TOP_RISK_CONTRACTS]:
+    for item in shown:
         anomalies = ", ".join(item["anomalies"]) if item["anomalies"] else "none"
         lines.append(
             f"- {item['customerName']} (contract #{item['contractId']}): "
             f"risk score {item['riskScore']}, level {item['level']}, anomalies: {anomalies}"
         )
+
+    # risk_scores is already sorted by riskScore descending (risk_scoring.py),
+    # so `shown` is always the TOP_RISK_CONTRACTS most urgent ones - but an
+    # org with more than TOP_RISK_CONTRACTS HIGH contracts would otherwise
+    # have the rest silently never mentioned anywhere in the report. Never
+    # hide that a limit was hit (same posture as `reliable: false` on
+    # /forecast) - count only HIGH ones beyond what's shown, since omitting
+    # a MEDIUM/LOW one here isn't a correctness problem (see
+    # scripts/eval_agent_insights.py's name_coverage for the same distinction).
+    remaining_high = sum(1 for item in risk_scores[TOP_RISK_CONTRACTS:] if item["level"] == "HIGH")
+    if remaining_high:
+        lines.append(f"... and {remaining_high} more HIGH-risk contract(s) not shown above.")
+
     return "\n".join(lines)
 
 
@@ -157,7 +171,10 @@ def _build_prompt(risk_scores: list, forecast: dict, language: str) -> str:
         f"Write like a professional financial analyst addressing a colleague directly: "
         f"plain, specific sentences, no filler phrases ('it is important to note', "
         f"'we remind you that'), no restating the same point twice in different words, "
-        f"no generic advice that isn't tied to a specific contract or number above."
+        f"no generic advice that isn't tied to a specific contract or number above. "
+        f"If the contract list above ends with a line stating more HIGH-risk contracts "
+        f"exist beyond those shown, explicitly state that count in section 1 - never "
+        f"let the reader assume the ones named are the only high-risk contracts there are."
     )
 
 

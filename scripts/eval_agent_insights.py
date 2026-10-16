@@ -98,6 +98,25 @@ SCENARIOS = [
             ],
         },
     },
+    {
+        # Checks the "... and N more HIGH-risk contract(s)" overflow note
+        # (app/services/agent.py's _format_risk_scores, added 2026-10-16):
+        # 7 HIGH contracts, only the top 5 are named individually.
+        "name": "overflow-high-risk",
+        "risk_scores": [
+            # round(): production's risk_scoring.py always rounds to 4
+            # decimals before this dict is built - an unrounded float here
+            # would produce artifacts like 0.9299999999999999 that are a bug
+            # in this test fixture, not a real risk-scoring or model issue.
+            {"customerName": f"Cliente {i}", "contractId": 300 + i, "riskScore": round(0.95 - i * 0.02, 2),
+             "level": "HIGH", "anomalies": ["EXPIRED"]}
+            for i in range(7)
+        ],
+        "forecast": {
+            "historical": [{"month": "2026-06", "amount": 30000.0}],
+            "forecast": [{"month": "2026-07", "amount": 31000.0, "lower": 28000.0, "upper": 34000.0}],
+        },
+    },
 ]
 
 # Matches both the Italian-style "48.230" _format_amount produces and a
