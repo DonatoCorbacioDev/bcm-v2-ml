@@ -35,8 +35,11 @@ It never writes to the database.
 - The backend also calls `GET /risk-scores` daily (`RiskScoreRefresher`) to
   generate high-risk notifications, and `GET /forecast`/`GET /anomalies`
   nightly (`MlCacheRefresher`) to warm the cache.
-- `GET /agent/insights` is not yet wired into the backend or frontend; it is
-  reachable directly on this service for now.
+- `GET /agent/insights` is proxied the same way, on `MlProxyController`
+  (cached, tenant-scoped), and rendered in the dashboard's
+  `AgentInsightsWidget` — including a free-text "ask the agent" follow-up
+  (`POST /agent/ask`) and a one-click action to turn a suggested follow-up
+  into a contract reminder.
 
 ## Endpoints
 
