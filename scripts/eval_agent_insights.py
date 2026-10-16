@@ -149,11 +149,19 @@ def expected_numbers(risk_scores: list, forecast: dict) -> set[str]:
 
 
 def name_coverage(report: str, risk_scores: list) -> float:
-    top_names = [r["customerName"] for r in risk_scores[: agent_service.TOP_RISK_CONTRACTS]]
-    if not top_names:
+    """Checks only HIGH-level names by design, not every name sent to the
+    prompt: the report's job (per MODEL_CARD.md's "Intended use") is
+    surfacing what to look at first, so correctly omitting a LOW-risk name
+    is not an error - silently dropping a HIGH one is. Falls back to all
+    names when there is no HIGH contract in this batch, since there's
+    nothing more important to single out."""
+    top = risk_scores[: agent_service.TOP_RISK_CONTRACTS]
+    high_names = [r["customerName"] for r in top if r["level"] == "HIGH"]
+    target_names = high_names or [r["customerName"] for r in top]
+    if not target_names:
         return 1.0
-    found = sum(1 for name in top_names if name in report)
-    return found / len(top_names)
+    found = sum(1 for name in target_names if name in report)
+    return found / len(target_names)
 
 
 def number_fidelity(report: str, risk_scores: list, forecast: dict) -> tuple[float, set[str]]:
