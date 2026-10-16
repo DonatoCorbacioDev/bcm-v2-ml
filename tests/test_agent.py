@@ -4,31 +4,42 @@ import httpx
 
 from app.services.agent import (
     _build_prompt, _call_ollama, _call_ollama_chat, _format_amount, _format_forecast,
-    _format_risk_scores, _run_tool, ask_agent, generate_insights,
+    _format_risk_scores, _resolve_placeholders, _run_tool, ask_agent, generate_insights,
 )
 
 
 # ── _format_risk_scores ──────────────────────────────────────────────────────
 
 def test_format_risk_scores_empty():
-    assert _format_risk_scores([]) == "No contracts found."
+    assert _format_risk_scores([], {}) == "No contracts found."
 
 
 def test_format_risk_scores_with_anomalies():
     risk_scores = [
         {"contractId": 1, "customerName": "Acme", "riskScore": 0.9, "level": "HIGH", "anomalies": ["EXPIRED"]},
     ]
-    result = _format_risk_scores(risk_scores)
+    placeholders = {}
+    result = _format_risk_scores(risk_scores, placeholders)
     assert "Acme" in result
     assert "HIGH" in result
     assert "EXPIRED" in result
+    assert placeholders["[R1]"] == "0.9"
+
+
+def test_format_risk_scores_score_is_a_token_not_the_raw_number():
+    # The whole point of the templating refactor: the raw decimal must never
+    # reach the model as text, only an opaque token - see _resolve_placeholders.
+    risk_scores = [{"contractId": 1, "customerName": "Acme", "riskScore": 0.91, "level": "HIGH", "anomalies": []}]
+    result = _format_risk_scores(risk_scores, {})
+    assert "0.91" not in result
+    assert "[R1]" in result
 
 
 def test_format_risk_scores_without_anomalies():
     risk_scores = [
         {"contractId": 2, "customerName": "Beta", "riskScore": 0.1, "level": "LOW", "anomalies": []},
     ]
-    result = _format_risk_scores(risk_scores)
+    result = _format_risk_scores(risk_scores, {})
     assert "none" in result
 
 
@@ -37,8 +48,10 @@ def test_format_risk_scores_limits_to_top_n():
         {"contractId": i, "customerName": f"Org{i}", "riskScore": 1.0, "level": "HIGH", "anomalies": []}
         for i in range(10)
     ]
-    result = _format_risk_scores(risk_scores)
+    placeholders = {}
+    result = _format_risk_scores(risk_scores, placeholders)
     assert result.count("Org") == 5
+    assert len(placeholders) == 5  # one score token per shown contract, not per all 10
 
 
 def test_format_risk_scores_notes_remaining_high_risk_contracts():
@@ -49,7 +62,7 @@ def test_format_risk_scores_notes_remaining_high_risk_contracts():
         {"contractId": i, "customerName": f"Org{i}", "riskScore": 1.0 - i * 0.01, "level": "HIGH", "anomalies": []}
         for i in range(7)
     ]
-    result = _format_risk_scores(risk_scores)
+    result = _format_risk_scores(risk_scores, {})
     assert "2 more HIGH-risk contract(s) not shown above" in result
 
 
@@ -64,7 +77,7 @@ def test_format_risk_scores_no_note_when_overflow_is_not_high():
         {"contractId": 50 + i, "customerName": f"Low{i}", "riskScore": 0.1, "level": "LOW", "anomalies": []}
         for i in range(2)
     ]
-    result = _format_risk_scores(risk_scores)
+    result = _format_risk_scores(risk_scores, {})
     assert "more HIGH-risk" not in result
 
 
@@ -81,7 +94,7 @@ def test_format_amount_small_value_no_separator():
 # ── _format_forecast ──────────────────────────────────────────────────────────
 
 def test_format_forecast_empty():
-    assert _format_forecast({"historical": [], "forecast": []}) == "No financial data available."
+    assert _format_forecast({"historical": [], "forecast": []}, {}) == "No financial data available."
 
 
 def test_format_forecast_with_data():
@@ -89,30 +102,51 @@ def test_format_forecast_with_data():
         "historical": [{"month": "2024-01", "amount": 1000.0}],
         "forecast": [{"month": "2024-02", "amount": 1100.0, "lower": 900.0, "upper": 1300.0}],
     }
-    result = _format_forecast(forecast)
+    placeholders = {}
+    result = _format_forecast(forecast, placeholders)
     assert "2024-01" in result
     assert "2024-02" in result
-    assert "900-1.300" in result
+    assert "1.000" not in result  # raw amount must never leak into the text itself
+    assert placeholders["[H1]"] == "1.000"
+    assert placeholders["[F1]"] == "1.100"
+    assert placeholders["[F1L]"] == "900"
+    assert placeholders["[F1U]"] == "1.300"
 
 
 def test_format_forecast_cleans_up_long_raw_floats():
-    # The actual bug being fixed: a long raw float is exactly what a small
-    # local LLM garbles most often - the formatted string must be short and clean.
+    # The actual bug being fixed originally: a long raw float is exactly
+    # what a small local LLM garbles most often - the placeholder's
+    # resolved VALUE must still be short and clean (the model itself never
+    # sees the float at all now, but the final report's figure does).
     forecast = {"historical": [{"month": "2024-01", "amount": 45230.567891234}], "forecast": []}
-    result = _format_forecast(forecast)
-    assert "45.231" in result
-    assert "567891" not in result
+    placeholders = {}
+    _format_forecast(forecast, placeholders)
+    assert placeholders["[H1]"] == "45.231"
 
 
 # ── _build_prompt ──────────────────────────────────────────────────────────────
 
 def test_build_prompt_includes_language_and_data():
-    risk_scores = [{"contractId": 1, "customerName": "Acme", "riskScore": 0.9, "level": "HIGH", "anomalies": []}]
-    forecast = {"historical": [], "forecast": []}
-    prompt = _build_prompt(risk_scores, forecast, "italian")
+    prompt = _build_prompt("- Acme (contract #1): risk score [R1]", "No financial data available.", "italian")
     assert "italian" in prompt
     assert "Acme" in prompt
     assert "No financial data available." in prompt
+
+
+# ── _resolve_placeholders ────────────────────────────────────────────────────
+
+def test_resolve_placeholders_substitutes_every_token():
+    report = "Il contratto Acme ha punteggio [R1], il fatturato di giugno è [H1]."
+    result = _resolve_placeholders(report, {"[R1]": "0.91", "[H1]": "48.230"})
+    assert result == "Il contratto Acme ha punteggio 0.91, il fatturato di giugno è 48.230."
+
+
+def test_resolve_placeholders_leaves_unknown_bracket_text_untouched():
+    # Not every "[...]" in a report is one of ours - resolution must not
+    # touch text it doesn't recognize.
+    report = "Vedi [nota 1] per i dettagli, punteggio [R1]."
+    result = _resolve_placeholders(report, {"[R1]": "0.91"})
+    assert result == "Vedi [nota 1] per i dettagli, punteggio 0.91."
 
 
 # ── _call_ollama ────────────────────────────────────────────────────────────────

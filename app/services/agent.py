@@ -89,17 +89,27 @@ _TOOLS = [
 ]
 
 
-def _format_risk_scores(risk_scores: list) -> str:
+def _format_risk_scores(risk_scores: list, placeholders: dict) -> str:
+    """Formats the top contracts for the prompt. Each risk score is replaced
+    with an opaque placeholder token (e.g. "[R1]") instead of being written
+    as a number - the model is asked to copy the token verbatim, never to
+    transcribe a decimal itself (see _build_prompt/_resolve_placeholders for
+    why: no amount of prompt instruction makes an LLM 100% reliable at
+    reproducing a decimal number unchanged, but it has nothing to "correct"
+    in a short opaque code). `placeholders` is mutated in place, mapping
+    each token to the real value it must resolve to."""
     if not risk_scores:
         return "No contracts found."
 
     shown = risk_scores[:TOP_RISK_CONTRACTS]
     lines = []
-    for item in shown:
+    for i, item in enumerate(shown):
         anomalies = ", ".join(item["anomalies"]) if item["anomalies"] else "none"
+        score_token = f"[R{i + 1}]"
+        placeholders[score_token] = str(item["riskScore"])
         lines.append(
             f"- {item['customerName']} (contract #{item['contractId']}): "
-            f"risk score {item['riskScore']}, level {item['level']}, anomalies: {anomalies}"
+            f"risk score {score_token}, level {item['level']}, anomalies: {anomalies}"
         )
 
     # risk_scores is already sorted by riskScore descending (risk_scoring.py),
@@ -118,16 +128,14 @@ def _format_risk_scores(risk_scores: list) -> str:
 
 
 def _format_amount(value: float) -> str:
-    """Round to the nearest euro and use a thousands separator, so the model
-    is given a short, clean token to copy instead of a long raw float (e.g.
-    "45.231" instead of "45230.567891...") - small local models garble long
-    unformatted numbers far more often than short clean ones. Italian-style
-    "." thousands separator matches settings.REPORT_LANGUAGE=italian, so it
-    doesn't collide with Italian's own "," decimal separator convention."""
+    """Round to the nearest euro and use a thousands separator - this is now
+    only ever a PLACEHOLDER's resolved value (see _resolve_placeholders),
+    never text the model itself has to copy, but kept short and clean
+    regardless since it's still what ends up in the final report."""
     return f"{round(value):,}".replace(",", ".")
 
 
-def _format_forecast(forecast: dict) -> str:
+def _format_forecast(forecast: dict, placeholders: dict) -> str:
     historical = forecast.get("historical", [])
     forecast_months = forecast.get("forecast", [])
 
@@ -137,45 +145,67 @@ def _format_forecast(forecast: dict) -> str:
     lines = []
     if historical:
         recent = historical[-3:]
-        recent_str = ", ".join(f"{h['month']}: {_format_amount(h['amount'])}" for h in recent)
-        lines.append(f"Recent months: {recent_str}")
+        recent_parts = []
+        for i, h in enumerate(recent):
+            token = f"[H{i + 1}]"
+            placeholders[token] = _format_amount(h["amount"])
+            recent_parts.append(f"{h['month']}: {token}")
+        lines.append(f"Recent months: {', '.join(recent_parts)}")
 
     if forecast_months:
-        forecast_str = ", ".join(
-            f"{f['month']}: {_format_amount(f['amount'])} "
-            f"(range {_format_amount(f['lower'])}-{_format_amount(f['upper'])})"
-            for f in forecast_months
-        )
-        lines.append(f"Forecast: {forecast_str}")
+        forecast_parts = []
+        for i, f in enumerate(forecast_months):
+            amount_token, lower_token, upper_token = f"[F{i + 1}]", f"[F{i + 1}L]", f"[F{i + 1}U]"
+            placeholders[amount_token] = _format_amount(f["amount"])
+            placeholders[lower_token] = _format_amount(f["lower"])
+            placeholders[upper_token] = _format_amount(f["upper"])
+            forecast_parts.append(f"{f['month']}: {amount_token} (range {lower_token}-{upper_token})")
+        lines.append(f"Forecast: {', '.join(forecast_parts)}")
 
     return "\n".join(lines)
 
 
-def _build_prompt(risk_scores: list, forecast: dict, language: str) -> str:
+def _build_prompt(formatted_risk_scores: str, formatted_forecast: str, language: str) -> str:
     return (
         f"You are a financial assistant for a contract management system. "
         f"Write your entire response in {language}.\n\n"
         f"Here are the contracts with the highest risk scores:\n"
-        f"{_format_risk_scores(risk_scores)}\n\n"
+        f"{formatted_risk_scores}\n\n"
         f"Here is the financial trend (historical and forecast amounts):\n"
-        f"{_format_forecast(forecast)}\n\n"
+        f"{formatted_forecast}\n\n"
         f"Write a concise report with three sections: "
         f"1) the highest-risk contracts and why, "
         f"2) the financial trend for the upcoming months, "
         f"3) recommended actions. "
-        f"When you mention any amount or score, copy the exact digits given above "
-        f"verbatim - never recalculate, round differently, or retype a number from memory. "
-        f"This includes the decimal/thousands separators: keep '.' exactly as shown above, "
-        f"even though {language} text would normally use ',' for decimals - do not localize "
-        f"the numbers, only the surrounding words. "
+        f"Every risk score and amount above is written as a short code in square "
+        f"brackets, like [R1] or [F2L] - these are placeholder tokens, not numbers, "
+        f"and will be substituted with the real figure automatically after you respond. "
+        f"Copy each token EXACTLY as shown, square brackets included, every time you "
+        f"refer to that score or amount - never write out a number yourself in its "
+        f"place, never translate, reformat, round, or guess what a token's value is. "
         f"Write like a professional financial analyst addressing a colleague directly: "
         f"plain, specific sentences, no filler phrases ('it is important to note', "
         f"'we remind you that'), no restating the same point twice in different words, "
-        f"no generic advice that isn't tied to a specific contract or number above. "
+        f"no generic advice that isn't tied to a specific contract or token above. "
         f"If the contract list above ends with a line stating more HIGH-risk contracts "
         f"exist beyond those shown, explicitly state that count in section 1 - never "
         f"let the reader assume the ones named are the only high-risk contracts there are."
     )
+
+
+def _resolve_placeholders(report: str, placeholders: dict) -> str:
+    """Replaces every placeholder token with its real value, deterministically.
+    This - not the prompt instruction above - is what actually guarantees
+    number fidelity: the instruction only makes the model MORE likely to copy
+    a token correctly, a short opaque code like "[R1]" is far less tempting
+    for a model to "helpfully" reformat than a decimal number would be, but
+    nothing here depends on the model behaving well. If a token comes back
+    malformed (wrong case, a stray space), it fails safely: the bracket
+    survives unresolved and is visibly wrong in the final text, instead of a
+    plausible-looking but silently incorrect number."""
+    for token, value in placeholders.items():
+        report = report.replace(token, value)
+    return report
 
 
 def _call_ollama(prompt: str) -> str:
@@ -197,8 +227,11 @@ def generate_insights(
     report = None
     error = None
     try:
-        prompt = _build_prompt(risk_scores, forecast, settings.REPORT_LANGUAGE)
-        report = _call_ollama(prompt)
+        placeholders: dict[str, str] = {}
+        formatted_risk_scores = _format_risk_scores(risk_scores, placeholders)
+        formatted_forecast = _format_forecast(forecast, placeholders)
+        prompt = _build_prompt(formatted_risk_scores, formatted_forecast, settings.REPORT_LANGUAGE)
+        report = _resolve_placeholders(_call_ollama(prompt), placeholders)
     except _OLLAMA_ERRORS as exc:
         error = f"Servizio AI non disponibile: {exc}"
 

@@ -5,26 +5,34 @@
 Evaluate /agent/insights report quality against a handful of hand-crafted
 scenarios, without a database or the FastAPI app running.
 
-Reuses the REAL prompt-building and Ollama-calling code from
-app.services.agent (_build_prompt/_call_ollama/_format_risk_scores/
-_format_forecast) instead of reimplementing them, so this eval exercises
-exactly what production runs. The prompt itself instructs the model to
-"copy the exact digits given above verbatim - never recalculate... or
-retype a number from memory" (see agent.py); this script checks whether it
-actually does.
+Reuses the REAL prompt-building/placeholder/Ollama-calling code from
+app.services.agent (_format_risk_scores/_format_forecast/_build_prompt/
+_call_ollama/_resolve_placeholders) instead of reimplementing it, so this
+eval exercises exactly what production runs.
 
-Two metrics, both computed from exact-substring matching (same idea as
-clause_risk.py's _is_grounded check, applied to names/numbers instead of a
-quoted excerpt):
+Since 2026-10-16, agent.py no longer asks the model to copy numbers
+verbatim - it never shows the model a number at all. Risk scores and
+amounts are replaced with opaque placeholder tokens ("[R1]", "[F2L]", ...)
+that this script's run_scenario resolves back to real figures the same way
+generate_insights does, deterministically, after the model responds. That
+architecture change is what actually fixed number fidelity (verified
+2026-10-16: 76% -> 100% on the original scenarios); it is not something
+this eval can "fail" on anymore by construction, so there is no
+number_fidelity metric below - checking it would just be re-testing
+Python's own str.replace().
 
-- name_coverage: of the top-N customer names fed into the prompt, what
-  fraction appear verbatim in the generated report. Low coverage usually
-  means the model summarized vaguely instead of naming contracts.
-- number_fidelity: of the numbers the report contains, what fraction were
-  actually given to it (vs. invented or recalculated). This is a simple
-  regex-based check, not a full parser - a model that reformats "48.230"
-  as "48230" (no thousands separator) will be flagged as "unknown", which
-  is a false positive worth knowing about, not a bug to silently hide.
+Two things are still worth checking automatically, because the model's
+BEHAVIOR (not the number substitution) can still go wrong:
+
+- name_coverage: of the HIGH-risk customer names fed into the prompt, what
+  fraction appear verbatim in the generated report (same exact-substring
+  idea as clause_risk.py's _is_grounded, applied to names). Low coverage
+  usually means the model summarized vaguely instead of naming contracts.
+- unresolved_placeholders: any "[...]"-shaped token still present in the
+  FINAL (already-resolved) report. This should always be empty - if it
+  isn't, the model wrote a token in a form _resolve_placeholders couldn't
+  exact-match (wrong case, a stray space, or an invented token that was
+  never given to it), and it needs a human look, not an automatic fix.
 
 Run:
     python scripts/eval_agent_insights.py
@@ -119,52 +127,27 @@ SCENARIOS = [
     },
 ]
 
-# Matches both the Italian-style "48.230" _format_amount produces and a
-# plain "0.91"/"123" fallback, so a number the model reformats slightly
-# differently from the input is still recognized as the SAME number, not a
-# new, unrelated token. Also matches an Italian decimal comma ("0,91") so
-# that localizing the separator is normalized away below instead of being
-# counted as two unrelated small numbers ("0" and "91").
-_NUMBER_RE = re.compile(r"\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?")
-
-# First-run finding (2026-10-16): a first pass flagged "Sezione 1"/"Sezione
-# 2"/"Sezione 3" (the report's own section numbering, not a data figure) as
-# "unknown" numbers - a false positive of the naive regex above, not a real
-# hallucination. Bare single-digit numbers are overwhelmingly this kind of
-# structural noise (section/list numbering) rather than a financial figure,
-# so they're excluded from the fidelity check entirely rather than compared.
-_STRUCTURAL_NUMBER_MAX_DIGITS = 1
-
-
-def _normalize_decimal(token: str) -> str:
-    """"0,91" and "0.91" must compare equal - the model localizing the
-    decimal separator is a (now explicitly disallowed, see _build_prompt)
-    formatting choice, not a different number. Only the LAST separator is
-    treated as decimal; "48.230" has none to normalize."""
-    if "," in token and "." not in token:
-        return token.replace(",", ".")
-    return token
+# Any leftover token matching OUR OWN naming scheme ([R1], [H2], [F3],
+# [F3L], [F3U] - see _format_risk_scores/_format_forecast) still present in
+# the FINAL (post-resolution) report. A clean run has none.
+#
+# Deliberately NOT "any [...]-shaped text": a first run showed llama3.2
+# inventing its own bracket notation for contract references, e.g.
+# "[Gialli Trasporti #201]" - copying the STYLE it was taught (brackets =
+# something referenceable) onto names we never asked it to bracket. That's
+# the model being creative with formatting, not a resolution failure - a
+# broader regex would have flagged it as one, the same false-positive shape
+# as the earlier "Sezione 1/2/3" issue.
+# Case-insensitive on purpose: _resolve_placeholders itself is exact-match
+# and would NOT fix a case-mangled token like "[r1]" (same reasoning as
+# _normalize_decimal elsewhere - detect the real failure, don't silently
+# paper over it) - this check needs to catch that near-miss as unresolved,
+# even though production's resolution step wouldn't have caught it either.
+_BRACKET_TOKEN_RE = re.compile(r"\[(?:R\d+|H\d+|F\d+L?U?)\]", re.IGNORECASE)
 
 
-def extract_numbers(text: str) -> set[str]:
-    raw = _NUMBER_RE.findall(text)
-    return {
-        _normalize_decimal(token)
-        for token in raw
-        if not (token.isdigit() and len(token) <= _STRUCTURAL_NUMBER_MAX_DIGITS)
-    }
-
-
-def expected_numbers(risk_scores: list, forecast: dict) -> set[str]:
-    """The exact number tokens actually given to the model, built the same
-    way the real prompt is (via agent_service's own formatting functions)
-    so this can never drift from what production sends."""
-    formatted = (
-        agent_service._format_risk_scores(risk_scores)
-        + "\n"
-        + agent_service._format_forecast(forecast)
-    )
-    return extract_numbers(formatted)
+def unresolved_placeholders(resolved_report: str) -> list[str]:
+    return _BRACKET_TOKEN_RE.findall(resolved_report)
 
 
 def name_coverage(report: str, risk_scores: list) -> float:
@@ -183,35 +166,32 @@ def name_coverage(report: str, risk_scores: list) -> float:
     return found / len(target_names)
 
 
-def number_fidelity(report: str, risk_scores: list, forecast: dict) -> tuple[float, set[str]]:
-    report_numbers = extract_numbers(report)
-    if not report_numbers:
-        return 1.0, set()
-    allowed = expected_numbers(risk_scores, forecast)
-    unknown = report_numbers - allowed
-    return 1 - (len(unknown) / len(report_numbers)), unknown
-
-
 def run_scenario(scenario: dict, model: str) -> dict | None:
     settings.OLLAMA_MODEL = model
-    prompt = agent_service._build_prompt(
-        scenario["risk_scores"], scenario["forecast"], settings.REPORT_LANGUAGE
-    )
+
+    # Same 3-step flow as generate_insights: format (collects placeholders),
+    # build the prompt from the already-formatted text, resolve after the
+    # model responds.
+    placeholders: dict[str, str] = {}
+    formatted_risk_scores = agent_service._format_risk_scores(scenario["risk_scores"], placeholders)
+    formatted_forecast = agent_service._format_forecast(scenario["forecast"], placeholders)
+    prompt = agent_service._build_prompt(formatted_risk_scores, formatted_forecast, settings.REPORT_LANGUAGE)
+
     try:
-        report = agent_service._call_ollama(prompt)
+        raw_report = agent_service._call_ollama(prompt)
     except agent_service._OLLAMA_ERRORS as exc:
         print(f"  [{scenario['name']} / {model}] Ollama call failed: {exc}")
         return None
 
+    report = agent_service._resolve_placeholders(raw_report, placeholders)
     coverage = name_coverage(report, scenario["risk_scores"])
-    fidelity, unknown_numbers = number_fidelity(report, scenario["risk_scores"], scenario["forecast"])
+    leftover = unresolved_placeholders(report)
     return {
         "scenario": scenario["name"],
         "model": model,
         "report": report,
         "name_coverage": coverage,
-        "number_fidelity": fidelity,
-        "unknown_numbers": unknown_numbers,
+        "unresolved": leftover,
     }
 
 
@@ -234,11 +214,8 @@ def main() -> None:
                 continue
             results.append(result)
             print(result["report"])
-            unknown_note = f"  unknown={sorted(result['unknown_numbers'])}" if result["unknown_numbers"] else ""
-            print(
-                f"name_coverage={result['name_coverage']:.0%}  "
-                f"number_fidelity={result['number_fidelity']:.0%}{unknown_note}"
-            )
+            unresolved_note = f"  UNRESOLVED={result['unresolved']}" if result["unresolved"] else ""
+            print(f"name_coverage={result['name_coverage']:.0%}{unresolved_note}")
             print()
 
     if not results:
@@ -252,8 +229,8 @@ def main() -> None:
             print(f"{model}: no successful runs")
             continue
         avg_coverage = sum(r["name_coverage"] for r in model_results) / len(model_results)
-        avg_fidelity = sum(r["number_fidelity"] for r in model_results) / len(model_results)
-        print(f"{model}: avg name_coverage={avg_coverage:.0%}  avg number_fidelity={avg_fidelity:.0%}")
+        total_unresolved = sum(len(r["unresolved"]) for r in model_results)
+        print(f"{model}: avg name_coverage={avg_coverage:.0%}  unresolved_placeholders={total_unresolved}")
 
 
 if __name__ == "__main__":
