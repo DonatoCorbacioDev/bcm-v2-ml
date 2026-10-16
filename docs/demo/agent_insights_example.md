@@ -33,8 +33,11 @@ curl "http://localhost:8000/agent/insights?months=3&org_id=1"
 
 No `Authorization` header is needed here because `INTERNAL_API_KEY` is unset
 in local dev (see [MODEL_CARD.md](../../MODEL_CARD.md) and `app/security.py`)
-— in the deployed system this endpoint is only reachable from the backend
-(see the "not yet wired into the backend" note in [README.md](../../README.md)).
+— this example calls the FastAPI service directly for a clean, unproxied
+output. In the deployed system the frontend goes through the backend's
+proxy instead (`GET /agent/insights` on `MlProxyController`, cached and
+tenant-scoped — see [README.md](../../README.md)), not this service
+directly.
 
 ## The contract: why it's HIGH risk, concretely
 
