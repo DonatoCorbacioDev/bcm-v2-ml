@@ -1,7 +1,9 @@
 # Model Card — BCM ML Service
 
-This document covers the three statistical/ML components exposed by this
-service: financial forecasting, contract risk scoring, and anomaly detection.
+This document covers the statistical/ML and LLM-backed components exposed by
+this service: financial forecasting, contract risk scoring, anomaly
+detection, and the two Ollama-backed endpoints (the fixed narrative report
+and the free-text Q&A).
 For API shapes and how the backend calls these, see [README.md](./README.md).
 For where training data comes from, see
 [docs/research/dataset_sources.md](./docs/research/dataset_sources.md).
@@ -170,6 +172,42 @@ rule built from the same features it was given, not predictive skill (see
   automated evaluation of report quality (only that Ollama calls are mocked
   in the test suite, see [README.md](./README.md#testing)), so regressions
   in phrasing/coherence would not be caught by CI.
+
+## 5. Free-text Q&A (`POST /agent/ask`)
+
+- **Model:** the same local Ollama model as section 4, but via tool-calling
+  (`/api/chat`) rather than a single-shot prompt: the model can call
+  read-only tools (`get_risk_scores`, `get_forecast`, `propose_reminder`)
+  to ground its answer in the caller's real data before responding, in up
+  to `MAX_TOOL_ITERATIONS` (3) round trips.
+- **Number fidelity:** fixed the same way as section 4, but structurally
+  different because the model can call tools in any order any number of
+  times on an open-ended question — there's no fixed prompt to template
+  ahead of time. Every risk score/amount a tool returns is replaced with
+  an opaque token (e.g. `[T3]`) before it reaches the model
+  (`_templatize_tool_result` in `app/services/agent.py`), resolved back to
+  the real value deterministically in the final answer
+  (`_resolve_placeholders`) — the model never sees or has to reproduce an
+  actual number. Verified live (2026-10-19): asked a real question about
+  two contracts, both risk scores came back exactly correct.
+- **What this does NOT fix, honestly:** in that same live run, the model
+  swapped which of the two contracts had one vs two anomalies in its
+  prose — it correctly echoed both contracts' tokens and anomaly codes,
+  but attributed them to the wrong contract. This is an entity-attribute
+  binding error, not a number-fidelity one: templating guarantees a
+  *figure* is never mistranscribed, it says nothing about whether the
+  model correctly associates *other* facts (anomaly lists, dates,
+  categorical fields) with the right named entity across several items in
+  context. No mitigation has been attempted for this — it's a reasoning
+  limitation of a small local model holding multiple items in context at
+  once, not something a prompt instruction or a deterministic substitution
+  step can close the way it did for numbers.
+- **No automated eval**: unlike section 4's `/agent/insights`
+  (`scripts/eval_agent_insights.py`), `ask_agent` has no equivalent
+  harness checking answer quality against fixed scenarios — only that
+  Ollama calls are mocked in the test suite. The entity-binding error
+  above was found by one manual live run, not caught by anything
+  automated; its real frequency is unknown.
 
 ## Training data — honesty check
 
