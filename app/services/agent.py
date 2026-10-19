@@ -1,6 +1,7 @@
 # Copyright (c) 2025 Donato Corbacio. All rights reserved.
 # Licensed under the terms of the LICENSE file at the repository root.
 
+import itertools
 import json
 
 import httpx
@@ -294,6 +295,55 @@ def _propose_reminder(
     }
 
 
+def _next_token(counter: "itertools.count") -> str:
+    return f"[T{next(counter)}]"
+
+
+def _templatize_risk_scores(risk_scores: list, placeholders: dict, counter: "itertools.count") -> list:
+    """Same idea as _format_risk_scores for generate_insights, applied to a
+    tool RESULT instead of prompt text: ask_agent lets the model call tools
+    in any order on a free-text question, so there's no fixed [R1]/[R2]
+    position scheme to reuse here - every score gets the next number in a
+    single counter shared across the whole ask_agent call, so two different
+    tool calls never collide on the same token. contractId is left as a
+    plain number, same as generate_insights - it's an identifier, not a
+    figure the model could plausibly mistranscribe."""
+    templatized = []
+    for item in risk_scores:
+        token = _next_token(counter)
+        placeholders[token] = str(item["riskScore"])
+        templatized.append({**item, "riskScore": token})
+    return templatized
+
+
+def _templatize_forecast(forecast: dict, placeholders: dict, counter: "itertools.count") -> dict:
+    def tokenize(value: float) -> str:
+        token = _next_token(counter)
+        placeholders[token] = _format_amount(value)
+        return token
+
+    return {
+        "historical": [{**h, "amount": tokenize(h["amount"])} for h in forecast.get("historical", [])],
+        "forecast": [
+            {**f, "amount": tokenize(f["amount"]), "lower": tokenize(f["lower"]), "upper": tokenize(f["upper"])}
+            for f in forecast.get("forecast", [])
+        ],
+    }
+
+
+def _templatize_tool_result(name: str, result: object, placeholders: dict, counter: "itertools.count") -> object:
+    """Dispatches to the right templatizer by tool name, so ask_agent's loop
+    doesn't need to know which tools carry figures worth protecting.
+    propose_reminder's result (and anything else) passes through unchanged -
+    its only text field is one the model itself supplied as an argument, not
+    a number read from our data."""
+    if name == "get_risk_scores" and isinstance(result, list):
+        return _templatize_risk_scores(result, placeholders, counter)
+    if name == "get_forecast" and isinstance(result, dict):
+        return _templatize_forecast(result, placeholders, counter)
+    return result
+
+
 def _call_ollama_chat(messages: list, tools: list | None) -> dict:
     payload = {"model": settings.OLLAMA_MODEL, "messages": messages, "stream": False}
     if tools:
@@ -310,7 +360,16 @@ def ask_agent(
     (risk scores, forecast) grounded in the caller's own data, instead of
     generating a fixed report. org_id/manager_id are bound here, once, from the
     authenticated request — see _run_tool for why they never flow through the
-    model's tool-call arguments."""
+    model's tool-call arguments.
+
+    Every risk score/amount a tool returns is templated into an opaque
+    token (_templatize_tool_result) before the model ever sees it, and
+    resolved back to the real value (_resolve_placeholders) only in the
+    final answer text - same guarantee as generate_insights, adapted to a
+    multi-turn, open-ended conversation instead of one fixed report: a
+    single `placeholders` map and token counter are shared across every
+    tool call this question triggers, so two different tool calls in the
+    same conversation never collide on the same token number."""
     messages = [
         {
             "role": "system",
@@ -318,33 +377,43 @@ def ask_agent(
                 "You are a financial assistant for a contract management system. "
                 f"Write your entire response in {settings.REPORT_LANGUAGE}. "
                 "Use the available tools to look up real data before answering; "
-                "never invent contract names, amounts, or dates."
+                "never invent contract names, amounts, or dates. "
+                "Risk scores and amounts returned by tools are given as short "
+                "placeholder tokens in square brackets, like [T3] - these are not "
+                "numbers, copy them verbatim whenever you refer to that score or "
+                "amount, never write out a number yourself in their place."
             ),
         },
         {"role": "user", "content": question},
     ]
     proposed_action = None
+    placeholders: dict[str, str] = {}
+    token_counter = itertools.count(1)
 
     try:
         for _ in range(MAX_TOOL_ITERATIONS):
             message = _call_ollama_chat(messages, _TOOLS)
             tool_calls = message.get("tool_calls") or []
             if not tool_calls:
-                return {"answer": message.get("content"), "error": None, "proposedAction": proposed_action}
+                content = message.get("content")
+                answer = _resolve_placeholders(content, placeholders) if content else content
+                return {"answer": answer, "error": None, "proposedAction": proposed_action}
 
             messages.append(message)
             for call in tool_calls:
                 function = call.get("function", {})
-                result = _run_tool(
-                    function.get("name", ""), function.get("arguments") or {}, db, org_id, manager_id
-                )
+                name = function.get("name", "")
+                result = _run_tool(name, function.get("arguments") or {}, db, org_id, manager_id)
                 if isinstance(result, dict) and "proposedAction" in result:
                     proposed_action = result["proposedAction"]
-                messages.append({"role": "tool", "content": json.dumps(result)})
+                templatized = _templatize_tool_result(name, result, placeholders, token_counter)
+                messages.append({"role": "tool", "content": json.dumps(templatized)})
 
         # Still requesting tools after MAX_TOOL_ITERATIONS — ask once more
         # without tools so the model is forced to answer with what it has.
         final = _call_ollama_chat(messages, tools=None)
-        return {"answer": final.get("content"), "error": None, "proposedAction": proposed_action}
+        final_content = final.get("content")
+        answer = _resolve_placeholders(final_content, placeholders) if final_content else final_content
+        return {"answer": answer, "error": None, "proposedAction": proposed_action}
     except _OLLAMA_ERRORS as exc:
         return {"answer": None, "error": f"Servizio AI non disponibile: {exc}", "proposedAction": None}

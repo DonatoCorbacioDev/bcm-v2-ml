@@ -1,10 +1,12 @@
+import itertools
 from unittest.mock import MagicMock, patch
 
 import httpx
 
 from app.services.agent import (
     _build_prompt, _call_ollama, _call_ollama_chat, _format_amount, _format_forecast,
-    _format_risk_scores, _resolve_placeholders, _run_tool, ask_agent, generate_insights,
+    _format_risk_scores, _resolve_placeholders, _run_tool, _templatize_forecast,
+    _templatize_risk_scores, _templatize_tool_result, ask_agent, generate_insights,
 )
 
 
@@ -340,6 +342,74 @@ def test_call_ollama_chat_omits_tools_when_none():
     assert "tools" not in mock_post.call_args.kwargs["json"]
 
 
+# ── _templatize_risk_scores / _templatize_forecast / _templatize_tool_result ──
+
+def test_templatize_risk_scores_replaces_score_with_a_token():
+    risk_scores = [{"customerName": "Acme", "contractId": 1, "riskScore": 0.91, "level": "HIGH", "anomalies": []}]
+    placeholders = {}
+    counter = itertools.count(1)
+    result = _templatize_risk_scores(risk_scores, placeholders, counter)
+    assert result == [{"customerName": "Acme", "contractId": 1, "riskScore": "[T1]", "level": "HIGH", "anomalies": []}]
+    assert placeholders == {"[T1]": "0.91"}
+
+
+def test_templatize_risk_scores_gives_each_contract_its_own_token():
+    risk_scores = [
+        {"customerName": "A", "contractId": 1, "riskScore": 0.9, "level": "HIGH", "anomalies": []},
+        {"customerName": "B", "contractId": 2, "riskScore": 0.3, "level": "LOW", "anomalies": []},
+    ]
+    placeholders = {}
+    result = _templatize_risk_scores(risk_scores, placeholders, itertools.count(1))
+    assert result[0]["riskScore"] == "[T1]"
+    assert result[1]["riskScore"] == "[T2]"
+    assert placeholders == {"[T1]": "0.9", "[T2]": "0.3"}
+
+
+def test_templatize_forecast_replaces_amounts_with_tokens():
+    forecast = {
+        "historical": [{"month": "2026-01", "amount": 1000.0}],
+        "forecast": [{"month": "2026-02", "amount": 1100.0, "lower": 900.0, "upper": 1300.0}],
+    }
+    placeholders = {}
+    result = _templatize_forecast(forecast, placeholders, itertools.count(1))
+    assert result["historical"] == [{"month": "2026-01", "amount": "[T1]"}]
+    assert result["forecast"] == [{"month": "2026-02", "amount": "[T2]", "lower": "[T3]", "upper": "[T4]"}]
+    assert placeholders == {"[T1]": "1.000", "[T2]": "1.100", "[T3]": "900", "[T4]": "1.300"}
+
+
+def test_templatize_forecast_and_risk_scores_share_one_counter_without_collision():
+    # ask_agent shares one counter across every tool call in a conversation -
+    # a risk-score token and a forecast token must never end up with the
+    # same number just because each templatizer started counting from 1.
+    placeholders = {}
+    counter = itertools.count(1)
+    risk_result = _templatize_risk_scores(
+        [{"customerName": "Acme", "contractId": 1, "riskScore": 0.9, "level": "HIGH", "anomalies": []}],
+        placeholders, counter,
+    )
+    forecast_result = _templatize_forecast(
+        {"historical": [{"month": "2026-01", "amount": 500.0}], "forecast": []}, placeholders, counter,
+    )
+    assert risk_result[0]["riskScore"] == "[T1]"
+    assert forecast_result["historical"][0]["amount"] == "[T2]"
+
+
+def test_templatize_tool_result_dispatches_by_name():
+    placeholders = {}
+    counter = itertools.count(1)
+    risk_scores = [{"customerName": "Acme", "contractId": 1, "riskScore": 0.9, "level": "HIGH", "anomalies": []}]
+    result = _templatize_tool_result("get_risk_scores", risk_scores, placeholders, counter)
+    assert result[0]["riskScore"] == "[T1]"
+
+
+def test_templatize_tool_result_passes_through_unknown_tools_unchanged():
+    placeholders = {}
+    reminder_result = {"proposedAction": {"type": "CREATE_REMINDER", "contractId": 1, "message": "hi"}}
+    result = _templatize_tool_result("propose_reminder", reminder_result, placeholders, itertools.count(1))
+    assert result == reminder_result
+    assert placeholders == {}
+
+
 # ── ask_agent ─────────────────────────────────────────────────────────────────
 
 def test_ask_agent_answers_directly_without_tool_calls():
@@ -359,10 +429,39 @@ def test_ask_agent_executes_a_requested_tool_then_answers():
     final_answer = {"role": "assistant", "content": "Acme is your riskiest contract."}
     with patch("app.services.agent._call_ollama_chat", side_effect=[tool_request, final_answer]), \
          patch("app.services.agent.risk_scoring.compute_risk_scores",
-               return_value=[{"customerName": "Acme"}]) as mock_risk:
+               return_value=[{"customerName": "Acme", "contractId": 1, "riskScore": 0.9,
+                              "level": "HIGH", "anomalies": []}]) as mock_risk:
         result = ask_agent(db, "Which contract is riskiest?", org_id=5)
     mock_risk.assert_called_once_with(db, 5, None)
     assert result == {"answer": "Acme is your riskiest contract.", "error": None, "proposedAction": None}
+
+
+def test_ask_agent_sends_a_token_to_the_model_and_resolves_it_in_the_answer():
+    """The actual fix: the tool result the model sees must carry a token,
+    never the raw risk score, and whatever token the model echoes back must
+    resolve to the real figure in the final answer - same number-fidelity
+    guarantee generate_insights has, applied to the free-text Q&A flow."""
+    db = MagicMock()
+    tool_request = {
+        "role": "assistant", "content": "",
+        "tool_calls": [{"function": {"name": "get_risk_scores", "arguments": {}}}],
+    }
+    # The model echoes the token it was given, exactly as instructed.
+    final_answer = {"role": "assistant", "content": "Il contratto Acme ha un punteggio di rischio di [T1]."}
+    with patch("app.services.agent._call_ollama_chat", side_effect=[tool_request, final_answer]) as mock_chat, \
+         patch("app.services.agent.risk_scoring.compute_risk_scores",
+               return_value=[{"customerName": "Acme", "contractId": 1, "riskScore": 0.91,
+                              "level": "HIGH", "anomalies": []}]):
+        result = ask_agent(db, "Which contract is riskiest?", org_id=5)
+
+    # The raw score must never have reached the model in the tool message.
+    tool_message_sent = mock_chat.call_args_list[1].args[0][-1]
+    assert tool_message_sent["role"] == "tool"
+    assert "0.91" not in tool_message_sent["content"]
+    assert "[T1]" in tool_message_sent["content"]
+
+    # The final answer has the real figure substituted back in, not the token.
+    assert result["answer"] == "Il contratto Acme ha un punteggio di rischio di 0.91."
 
 
 def test_ask_agent_passes_manager_id_through_to_tools():
@@ -374,7 +473,8 @@ def test_ask_agent_passes_manager_id_through_to_tools():
     final_answer = {"role": "assistant", "content": "Acme is your riskiest contract."}
     with patch("app.services.agent._call_ollama_chat", side_effect=[tool_request, final_answer]), \
          patch("app.services.agent.risk_scoring.compute_risk_scores",
-               return_value=[{"customerName": "Acme"}]) as mock_risk:
+               return_value=[{"customerName": "Acme", "contractId": 1, "riskScore": 0.9,
+                              "level": "HIGH", "anomalies": []}]) as mock_risk:
         ask_agent(db, "Which contract is riskiest?", org_id=5, manager_id=42)
     mock_risk.assert_called_once_with(db, 5, 42)
 
