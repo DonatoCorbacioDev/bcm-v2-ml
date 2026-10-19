@@ -28,6 +28,50 @@ For where training data comes from, see
   expiring) that would explain a trend break. It also assumes monthly
   granularity; sparse or irregular reporting degrades the fit silently rather
   than raising a warning beyond the `reliable` flag.
+- **Two different thresholds, not one** (found while writing the backtest
+  below, 2026-10-19): `reliable: false` triggers under **12** months of
+  history (`len(monthly) >= 12` in `compute_forecast`), but Prophet's own
+  `yearly_seasonality` parameter is only enabled at **24** months
+  (`yearly_seasonality=n >= 24` in `_prophet_forecast`). A 15-month history
+  reports `reliable: true` to the caller while the model underneath is
+  still fit *without* yearly seasonality — the flag is more optimistic
+  than the model actually is in the 12–23 month range. Not fixed here;
+  flagged as a real, previously-undocumented inconsistency.
+
+### Backtest — how accurate is the forecast, actually?
+
+Until 2026-10-19 this section asserted Prophet's methodology but never
+measured its error against a held-out answer. `scripts/backtest_forecast.py`
+does walk-forward validation: hide the last 3 months of a known synthetic
+series, fit `_prophet_forecast` on what's left, forecast forward, compare
+against the real (hidden) values with the same error metrics reported for
+the risk classifier's regression-flavored cousins — MAE, RMSE, MAPE, and
+RAE/RSE (relative to an "always predict the mean" baseline) — plus the
+same "beat a trivial baseline" honesty check section 2.2 uses for the
+classifier, here against a naive "repeat the last known month" forecast.
+
+| Scenario (synthetic, seeded) | Train months | RMSE (Prophet) | RMSE (naive) | Beats naive? |
+|---|---|---|---|---|
+| Clean trend + yearly seasonality | 27 | 584.79 | 651.52 | **Yes** |
+| Same, with heavy noise | 27 | 11,761.33 | 14,437.67 | **Yes** |
+| Short history (11 months, below the `reliable` threshold) | 11 | 4,794.97 | 4,151.66 | **No** |
+
+**In plain terms**: with enough history, Prophet is genuinely better than
+doing nothing clever (beats the naive baseline on both a clean and a noisy
+series). Below the `reliable` threshold, it's not just "less trustworthy"
+in the abstract sense the flag already implied — it concretely produced a
+*worse* forecast than just repeating last month's number. This is the
+first quantitative evidence behind `reliable: false`, not just a
+theoretical caveat.
+
+**Honesty check, same as section 2's**: these are hand-crafted synthetic
+series (known trend + yearly sine wave + Gaussian noise, fixed seed), not
+real portfolios — the numbers describe how well Prophet recovers a pattern
+we know is there, not real-world accuracy on actual client data. RAE/RSE
+above 1.0 on all three scenarios reflect that their baseline (the mean of
+only 3 held-out months) is itself a small, noisy reference point for a
+short horizon - the naive-last-value comparison is the more meaningful of
+the two baselines here for that reason, not RAE/RSE in isolation.
 
 ## 2. Contract risk scoring (`GET /risk-scores`)
 
