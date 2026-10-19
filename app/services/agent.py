@@ -3,6 +3,7 @@
 
 import itertools
 import json
+import re
 
 import httpx
 from sqlalchemy.orm import Session
@@ -353,6 +354,34 @@ def _call_ollama_chat(messages: list, tools: list | None) -> dict:
     return response.json()["message"]
 
 
+# A forced final call (tools=None, after MAX_TOOL_ITERATIONS) can still have
+# the model write out what looks like an attempted tool call as plain text
+# instead of a natural-language answer - observed live via
+# scripts/eval_ask_agent.py (2026-10-19): '{"name":"get_risk_scores",
+# "parameters":{"}}'. Deliberately narrow (only the shape Ollama's own
+# tool-call JSON takes, not "any text starting with a brace") so a
+# legitimate answer that happens to mention JSON isn't misflagged.
+_LEAKED_TOOL_CALL_RE = re.compile(r'^\s*\{\s*"name"\s*:', re.IGNORECASE)
+
+_LEAKED_TOOL_CALL_ERROR = "Il servizio AI non è riuscito a generare una risposta valida. Riprova."
+
+
+def _looks_like_leaked_tool_call(content: str) -> bool:
+    return bool(_LEAKED_TOOL_CALL_RE.match(content))
+
+
+def _finalize_answer(content: str | None, placeholders: dict, proposed_action: dict | None) -> dict:
+    """Shared by both places ask_agent can produce a final answer (the
+    early return when the model stops requesting tools, and the forced
+    final call after MAX_TOOL_ITERATIONS) - one place to fail safely on a
+    leaked tool call and to resolve placeholder tokens, instead of two
+    copies that could drift."""
+    if content and _looks_like_leaked_tool_call(content):
+        return {"answer": None, "error": _LEAKED_TOOL_CALL_ERROR, "proposedAction": proposed_action}
+    answer = _resolve_placeholders(content, placeholders) if content else content
+    return {"answer": answer, "error": None, "proposedAction": proposed_action}
+
+
 def ask_agent(
     db: Session, question: str, org_id: int | None = None, manager_id: int | None = None
 ) -> dict:
@@ -395,9 +424,7 @@ def ask_agent(
             message = _call_ollama_chat(messages, _TOOLS)
             tool_calls = message.get("tool_calls") or []
             if not tool_calls:
-                content = message.get("content")
-                answer = _resolve_placeholders(content, placeholders) if content else content
-                return {"answer": answer, "error": None, "proposedAction": proposed_action}
+                return _finalize_answer(message.get("content"), placeholders, proposed_action)
 
             messages.append(message)
             for call in tool_calls:
@@ -412,8 +439,6 @@ def ask_agent(
         # Still requesting tools after MAX_TOOL_ITERATIONS — ask once more
         # without tools so the model is forced to answer with what it has.
         final = _call_ollama_chat(messages, tools=None)
-        final_content = final.get("content")
-        answer = _resolve_placeholders(final_content, placeholders) if final_content else final_content
-        return {"answer": answer, "error": None, "proposedAction": proposed_action}
+        return _finalize_answer(final.get("content"), placeholders, proposed_action)
     except _OLLAMA_ERRORS as exc:
         return {"answer": None, "error": f"Servizio AI non disponibile: {exc}", "proposedAction": None}

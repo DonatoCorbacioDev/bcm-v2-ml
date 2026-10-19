@@ -5,8 +5,9 @@ import httpx
 
 from app.services.agent import (
     _build_prompt, _call_ollama, _call_ollama_chat, _format_amount, _format_forecast,
-    _format_risk_scores, _resolve_placeholders, _run_tool, _templatize_forecast,
-    _templatize_risk_scores, _templatize_tool_result, ask_agent, generate_insights,
+    _format_risk_scores, _looks_like_leaked_tool_call, _resolve_placeholders, _run_tool,
+    _templatize_forecast, _templatize_risk_scores, _templatize_tool_result, ask_agent,
+    generate_insights,
 )
 
 
@@ -410,6 +411,27 @@ def test_templatize_tool_result_passes_through_unknown_tools_unchanged():
     assert placeholders == {}
 
 
+# ── _looks_like_leaked_tool_call ────────────────────────────────────────────────
+
+def test_looks_like_leaked_tool_call_detects_the_real_observed_shape():
+    # The exact text a live run produced (scripts/eval_ask_agent.py, 2026-10-19).
+    assert _looks_like_leaked_tool_call('{"name":"get_risk_scores","parameters":{"}}') is True
+
+
+def test_looks_like_leaked_tool_call_allows_leading_whitespace():
+    assert _looks_like_leaked_tool_call('  \n{"name": "get_forecast", "parameters": {}}') is True
+
+
+def test_looks_like_leaked_tool_call_does_not_flag_a_normal_answer():
+    assert _looks_like_leaked_tool_call("Il contratto Acme ha un punteggio di 0.91.") is False
+
+
+def test_looks_like_leaked_tool_call_does_not_flag_json_mentioned_in_prose():
+    # Narrow on purpose: only Ollama's own tool-call JSON shape, not any
+    # text that happens to contain braces or the word "name".
+    assert _looks_like_leaked_tool_call('Il campo si chiama "name" nel contratto.') is False
+
+
 # ── ask_agent ─────────────────────────────────────────────────────────────────
 
 def test_ask_agent_answers_directly_without_tool_calls():
@@ -491,6 +513,35 @@ def test_ask_agent_forces_a_final_answer_after_max_iterations():
          patch("app.services.agent.risk_scoring.compute_risk_scores", return_value=[]):
         result = ask_agent(db, "Loop forever?", org_id=1)
     assert result == {"answer": "Best I can say without more tool calls.", "error": None, "proposedAction": None}
+
+
+def test_ask_agent_treats_a_leaked_tool_call_as_an_error_not_an_answer():
+    """Regression test for the real failure found live via
+    scripts/eval_ask_agent.py (2026-10-19): the forced final call (no tools
+    offered) still produced tool-call-shaped JSON as plain text instead of
+    a natural-language answer. That must never reach the user as if it
+    were a valid response."""
+    db = MagicMock()
+    always_wants_tool = {
+        "role": "assistant", "content": "",
+        "tool_calls": [{"function": {"name": "get_risk_scores", "arguments": {}}}],
+    }
+    garbled_final = {"role": "assistant", "content": '{"name":"get_risk_scores","parameters":{"}}'}
+    with patch("app.services.agent._call_ollama_chat",
+               side_effect=[always_wants_tool, always_wants_tool, always_wants_tool, garbled_final]), \
+         patch("app.services.agent.risk_scoring.compute_risk_scores", return_value=[]):
+        result = ask_agent(db, "Loop forever?", org_id=1)
+    assert result["answer"] is None
+    assert "non è riuscito a generare una risposta valida" in result["error"]
+
+
+def test_ask_agent_treats_a_leaked_tool_call_as_an_error_on_the_first_turn_too():
+    db = MagicMock()
+    garbled_first_turn = {"role": "assistant", "content": '{"name": "get_forecast", "parameters": {}}'}
+    with patch("app.services.agent._call_ollama_chat", return_value=garbled_first_turn):
+        result = ask_agent(db, "Any question", org_id=1)
+    assert result["answer"] is None
+    assert "non è riuscito a generare una risposta valida" in result["error"]
 
 
 def test_ask_agent_returns_error_when_ollama_unavailable():
