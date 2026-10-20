@@ -422,6 +422,14 @@ def test_templatize_tool_result_dispatches_by_name():
     assert result[0]["riskScore"] == "[T1]"
 
 
+def test_templatize_tool_result_dispatches_forecast_by_name():
+    placeholders = {}
+    forecast = {"historical": [{"month": "2026-01", "amount": 1000.0}], "forecast": []}
+    result = _templatize_tool_result("get_forecast", forecast, placeholders, itertools.count(1))
+    assert result["historical"][0]["amount"] == "[T1]"
+    assert placeholders == {"[T1]": "1.000"}
+
+
 def test_templatize_tool_result_passes_through_unknown_tools_unchanged():
     placeholders = {}
     reminder_result = {"proposedAction": {"type": "CREATE_REMINDER", "contractId": 1, "message": "hi"}}
