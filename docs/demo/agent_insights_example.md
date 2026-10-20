@@ -157,8 +157,9 @@ for what the model does and does not influence.
 
 ## Forecast (Prophet, `reliable: true`)
 
-12+ months of history were available for this organization, so Prophet's
-yearly-seasonality component is active (`reliable: true` — see
+This snapshot predates 2026-10-20, when `reliable: true` only required 12+
+months of history; it now requires 24+, the same threshold at which
+Prophet's yearly-seasonality component is fit (see
 [MODEL_CARD.md](../../MODEL_CARD.md#1-financial-forecasting-get-forecast)):
 
 | Month | Forecast | 95% CI |

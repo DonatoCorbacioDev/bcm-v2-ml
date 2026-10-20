@@ -120,16 +120,36 @@ def test_forecast_manager_id_takes_precedence_over_org_id():
     session.query.return_value.filter.assert_not_called()
 
 
-def test_forecast_reliable_flag_false_when_fewer_than_12_months():
-    rows = [FVMock(2024, m, 10000.0) for m in range(1, 7)]  # 6 months
-    result = compute_forecast(make_session(rows), 3)
+def months_of_history(n):
+    return [FVMock(2022 + i // 12, i % 12 + 1, 10000.0) for i in range(n)]
+
+
+def test_forecast_reliable_flag_false_when_fewer_than_24_months():
+    result = compute_forecast(make_session(months_of_history(6)), 3)
     assert result["reliable"] is False
 
 
-def test_forecast_reliable_flag_true_when_12_or_more_months():
-    rows = [FVMock(2023, m, 10000.0) for m in range(1, 13)]  # 12 months
-    result = compute_forecast(make_session(rows), 3)
+def test_forecast_reliable_flag_false_just_below_threshold():
+    # Regression test: 12-23 months used to report reliable=True while
+    # Prophet was still fit without yearly seasonality (threshold 24).
+    result = compute_forecast(make_session(months_of_history(23)), 3)
+    assert result["reliable"] is False
+
+
+def test_forecast_reliable_flag_true_when_24_or_more_months():
+    result = compute_forecast(make_session(months_of_history(24)), 3)
     assert result["reliable"] is True
+
+
+@patch("app.services.forecasting.Prophet")
+def test_seasonality_and_reliable_share_one_threshold(prophet_cls):
+    # The two decisions must flip at the same history length, never apart.
+    from app.services.forecasting import MIN_MONTHS_FOR_SEASONALITY
+    prophet_cls.return_value.predict.side_effect = RuntimeError("skip fit")
+    for n in (MIN_MONTHS_FOR_SEASONALITY - 1, MIN_MONTHS_FOR_SEASONALITY):
+        result = compute_forecast(make_session(months_of_history(n)), 3)
+        yearly = prophet_cls.call_args.kwargs["yearly_seasonality"]
+        assert yearly is result["reliable"]
 
 
 def test_forecast_single_point_is_not_reliable():

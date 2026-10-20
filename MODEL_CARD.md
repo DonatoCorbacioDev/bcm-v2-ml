@@ -18,11 +18,12 @@ For where training data comes from, see
   raises during fitting (e.g. degenerate series), the same flat fallback is
   used and the failure is logged, not surfaced as an error.
 - **Confidence interval:** 95%, produced by Prophet directly (`interval_width=0.95`).
-- **`reliable` flag:** Prophet needs ~12+ months of history to detect real
-  yearly seasonality; below that it behaves close to a linear trend line. The
-  response includes `reliable: false` when history is under 12 months so
-  callers can show a caveat instead of presenting the forecast as equally
-  trustworthy in both cases.
+- **`reliable` flag:** yearly seasonality is only fit with 24+ months of
+  history (`MIN_MONTHS_FOR_SEASONALITY` in `forecasting.py`); below that
+  Prophet is a trend line only. The response includes `reliable: false`
+  when history is under that same 24-month threshold so callers can show a
+  caveat instead of presenting the forecast as equally trustworthy in both
+  cases.
 - **Limitations:** single-variable time series (amount only) — it has no
   visibility into contract-level events (a new contract signed, a large one
   expiring) that would explain a trend break. It also assumes monthly
@@ -35,8 +36,15 @@ For where training data comes from, see
   (`yearly_seasonality=n >= 24` in `_prophet_forecast`). A 15-month history
   reports `reliable: true` to the caller while the model underneath is
   still fit *without* yearly seasonality — the flag is more optimistic
-  than the model actually is in the 12–23 month range. Not fixed here;
-  flagged as a real, previously-undocumented inconsistency.
+  than the model actually is in the 12–23 month range.
+  **Fixed 2026-10-20**: both now read the single
+  `MIN_MONTHS_FOR_SEASONALITY = 24` constant, and a unit test asserts they
+  flip together. Direction chosen from evidence, not by picking a number —
+  see the threshold sweep below: raising `reliable` to 24 (rather than
+  lowering seasonality to 12) because a one-off probe (same 10 seeds,
+  seasonality forced on) showed fitting yearly seasonality on 12–21 months
+  overfits badly (median RMSE 6k–30k, beat naive in 1 of 40 runs), worse
+  than the trend-only fit it would replace.
 
 ### Backtest — how accurate is the forecast, actually?
 
@@ -63,6 +71,24 @@ in the abstract sense the flag already implied — it concretely produced a
 *worse* forecast than just repeating last month's number. This is the
 first quantitative evidence behind `reliable: false`, not just a
 theoretical caveat.
+
+**Threshold sweep** (added 2026-10-20, same script, production
+`_prophet_forecast`, clean series, 10 seeds per length) — where does the
+threshold actually belong?
+
+| Train months | `reliable` | Median RMSE (Prophet) | Median RMSE (naive) | Beats naive |
+|---|---|---|---|---|
+| 12 | false | 6,771 | 5,123 | 0/10 |
+| 15 | false | 4,632 | 1,074 | 0/10 |
+| 18 | false | 3,253 | 3,432 | 8/10 |
+| 21 | false | 2,681 | 1,611 | 1/10 |
+| 24 | true | 1,424 | 4,840 | 10/10 |
+
+Under the old 12-month flag, the 12–21 rows were all reported
+`reliable: true` while beating the naive baseline in only 9 of 40 runs.
+The 18-month row is the exception — a trend line happens to suffice
+there for this sine phase — which is why a single seed per length would
+have been misleading. At 24, with seasonality on, Prophet wins every run.
 
 **Honesty check, same as section 2's**: these are hand-crafted synthetic
 series (known trend + yearly sine wave + Gaussian noise, fixed seed), not

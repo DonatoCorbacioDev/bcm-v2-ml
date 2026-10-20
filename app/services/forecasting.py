@@ -25,6 +25,14 @@ logging.getLogger("cmdstanpy").setLevel(logging.ERROR)
 
 logger = logging.getLogger(__name__)
 
+# Single threshold for both "fit yearly seasonality" and "flag as reliable" -
+# they used to be two separate numbers (24 vs 12), so a 12-23 month history
+# was reported reliable while being fit as a plain trend line. Backtest
+# (scripts/backtest_forecast.py, MODEL_CARD.md section 1): below 24 months the
+# trend-only fit mostly loses to a naive "repeat last month" forecast, and
+# enabling seasonality earlier overfits badly - so 24 it is, for both.
+MIN_MONTHS_FOR_SEASONALITY = 24
+
 
 def _flat_forecast(level: float, h: int) -> list[dict]:
     """Return a flat forecast with ±10% CI when not enough data for Prophet."""
@@ -43,7 +51,7 @@ def _prophet_forecast(df: pd.DataFrame, h: int) -> list[dict]:
     """Fit Prophet on a ds/y DataFrame and return h future monthly periods."""
     n = len(df)
     m = Prophet(
-        yearly_seasonality=n >= 24,
+        yearly_seasonality=n >= MIN_MONTHS_FOR_SEASONALITY,
         weekly_seasonality=False,
         daily_seasonality=False,
         interval_width=0.95,
@@ -112,9 +120,9 @@ def compute_forecast(
 
     safe_months = min(max(months, 1), 24)
     last_date = monthly["date"].iloc[-1]
-    # Prophet needs 12+ months to detect real yearly seasonality;
-    # below that it behaves like linear regression — flag it so callers can warn users.
-    reliable = len(monthly) >= 12
+    # Below the seasonality threshold Prophet is fit as a trend line only —
+    # flag it so callers can warn users.
+    reliable = len(monthly) >= MIN_MONTHS_FOR_SEASONALITY
 
     if len(monthly) < 2:
         flat = _flat_forecast(float(monthly["amount"].iloc[-1]), safe_months)

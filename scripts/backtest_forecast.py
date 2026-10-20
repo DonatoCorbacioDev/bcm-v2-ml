@@ -49,7 +49,7 @@ import pandas as pd  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.services.forecasting import _prophet_forecast  # noqa: E402
+from app.services.forecasting import MIN_MONTHS_FOR_SEASONALITY, _prophet_forecast  # noqa: E402
 
 HOLDOUT_MONTHS = 3
 
@@ -81,8 +81,7 @@ SCENARIOS = [
     },
     {
         "name": "short-history-no-seasonality-fit",
-        # Below the n>=24 threshold _prophet_forecast uses to enable yearly
-        # seasonality (see forecasting.py) - this is the regime
+        # Below MIN_MONTHS_FOR_SEASONALITY (see forecasting.py) - this is the regime
         # MODEL_CARD.md's `reliable: false` flag exists to warn callers
         # about; this scenario measures how much worse it actually is.
         "series": synthetic_series(14, trend_per_month=300, yearly_amplitude=4000, noise_std=500, seed=3),
@@ -164,10 +163,44 @@ def print_result(result: dict) -> None:
     print()
 
 
+SWEEP_TRAIN_MONTHS = [12, 15, 18, 21, 24]
+SWEEP_SEEDS = range(100, 110)
+
+
+def threshold_sweep() -> None:
+    """Does the production `reliable` threshold sit where Prophet actually
+    starts beating the naive baseline? Same clean synthetic pattern, several
+    history lengths around MIN_MONTHS_FOR_SEASONALITY, 10 seeds each - one
+    seed per length would be anecdote, not evidence."""
+    print("=== Threshold sweep (clean series, 10 seeds per length) ===")
+    print(f"{'train':>5} {'reliable':>9} {'median RMSE':>12} {'naive':>8} {'beats naive':>12}")
+    for train_months in SWEEP_TRAIN_MONTHS:
+        prophet_rmse, naive_rmse, wins = [], [], 0
+        for seed in SWEEP_SEEDS:
+            series = synthetic_series(
+                train_months + HOLDOUT_MONTHS, trend_per_month=300, yearly_amplitude=4000,
+                noise_std=500, seed=seed,
+            )
+            train = series.iloc[:-HOLDOUT_MONTHS]
+            actual = series.iloc[-HOLDOUT_MONTHS:]["y"].to_numpy()
+            predicted = np.array([row["amount"] for row in _prophet_forecast(train, HOLDOUT_MONTHS)])
+            prophet_rmse.append(rmse(actual, predicted))
+            naive_rmse.append(rmse(actual, naive_forecast(train, HOLDOUT_MONTHS)))
+            wins += prophet_rmse[-1] < naive_rmse[-1]
+        reliable = train_months >= MIN_MONTHS_FOR_SEASONALITY
+        print(
+            f"{train_months:>5} {str(reliable):>9} {np.median(prophet_rmse):>12.0f} "
+            f"{np.median(naive_rmse):>8.0f} {wins:>9}/{len(SWEEP_SEEDS)}"
+        )
+    print()
+
+
 def main() -> None:
     results = [run_scenario(s) for s in SCENARIOS]
     for result in results:
         print_result(result)
+
+    threshold_sweep()
 
     print("=== Summary ===")
     for result in results:
