@@ -313,8 +313,25 @@ def _templatize_risk_scores(risk_scores: list, placeholders: dict, counter: "ite
     for item in risk_scores:
         token = _next_token(counter)
         placeholders[token] = str(item["riskScore"])
-        templatized.append({**item, "riskScore": token})
+        templatized.append({"summary": _risk_summary(item, token), **item, "riskScore": token})
     return templatized
+
+
+def _risk_summary(item: dict, score_token: str) -> str:
+    """One self-contained line per contract, placed FIRST in its record:
+    name, score token and an explicit anomaly COUNT next to the codes.
+    With only the plain fields, llama3.2 answering an open question about
+    the top contract ("quale contratto ha il rischio piu alto?") claimed
+    it had the NEIGHBORING record's anomalies/count in 5 of 9 runs
+    (scripts/eval_ask_agent.py, 2026-10-20) - with this line, 0 of 10. It
+    reduces the binding error, it doesn't make it impossible by construction
+    the way placeholder tokens do for figures (see MODEL_CARD.md section 5)."""
+    codes = item["anomalies"]
+    count = "1 anomaly" if len(codes) == 1 else f"{len(codes)} anomalies"
+    return (
+        f"{item['customerName']} (contract #{item['contractId']}): risk score {score_token}, "
+        f"level {item['level']}, {count}: {', '.join(codes) or 'none'}"
+    )
 
 
 def _templatize_forecast(forecast: dict, placeholders: dict, counter: "itertools.count") -> dict:

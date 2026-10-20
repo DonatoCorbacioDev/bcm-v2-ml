@@ -268,16 +268,32 @@ rule built from the same features it was given, not predictive skill (see
   *figure* is never mistranscribed, it says nothing about whether the
   model correctly associates *other* facts (anomaly lists, dates,
   categorical fields) with the right named entity across several items in
-  context. No mitigation has been attempted for this — it's a reasoning
-  limitation of a small local model holding multiple items in context at
-  once, not something a prompt instruction or a deterministic substitution
-  step can close the way it did for numbers.
-- **No automated eval**: unlike section 4's `/agent/insights`
-  (`scripts/eval_agent_insights.py`), `ask_agent` has no equivalent
-  harness checking answer quality against fixed scenarios — only that
-  Ollama calls are mocked in the test suite. The entity-binding error
-  above was found by one manual live run, not caught by anything
-  automated; its real frequency is unknown.
+  context.
+- **Measured and mitigated (2026-10-20)** with `scripts/eval_ask_agent.py`.
+  The error is not rare and not random: on list-style questions ("elenca i
+  contratti con le anomalie") it never appeared (0/14), but on an open
+  question about the top contract ("quale contratto ha il rischio piu
+  alto?") llama3.2 gave it the *neighboring* record's anomalies or anomaly
+  count in **10 of 16** answered runs — almost always "presenta due
+  anomalie" about a contract with one. Mitigation: each risk-score record
+  now starts with a `summary` line stating name, score token and an
+  explicit anomaly count together (`_risk_summary` in `agent.py`). A
+  plain-text tool result instead of JSON was also tried (1/10) and lost to
+  this (0/10). Result on the same open question: **1 of 17** answered runs.
+  This *reduces* the error, it does not make it impossible by construction
+  the way tokens do for numbers — the remaining case attached "due
+  anomalie" to an unnamed "questo contratto" right after a correct sentence
+  about the top one.
+- **Known side effect**: the summary line is English, and in 3 of 7 runs
+  the model copied it verbatim into an Italian answer ("presenta 1
+  anomaly"). Cosmetic, accepted as the cheaper problem; not yet addressed.
+- **Detector limits**: the eval matches each anomaly by literal code or a
+  known Italian paraphrase, plus claimed counts ("due anomalie"), and
+  carries the last single named contract into following unnamed sentences.
+  It is still a heuristic: a paraphrase outside its list slips through,
+  and a summary sentence listing every code after naming one contract is
+  a false positive (seen once, 2026-10-20). Counts above were confirmed by
+  reading every answer, not taken from the detector alone.
 
 ## Training data — honesty check
 

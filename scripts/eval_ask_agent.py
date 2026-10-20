@@ -24,8 +24,9 @@ A live run on 2026-10-19 found the model correctly quoting two contracts'
 exact risk scores (templating worked) while swapping which contract had
 which anomalies in its prose - an entity-attribute binding error, not a
 number one. Templating cannot fix this by design (see MODEL_CARD.md
-section 5) - this script exists to MEASURE how often it happens, not to
-prevent it. Scenarios below deliberately give each contract a disjoint
+section 5) - this script exists to MEASURE how often it happens. It did:
+on 2026-10-20 the open-phrasing scenario misattributed in 10/16 runs,
+which drove the `summary` line in agent.py's _risk_summary (1/17 after). Scenarios below deliberately give each contract a disjoint
 anomaly set, so a sentence naming contract X alongside an anomaly code
 that belongs only to a DIFFERENT contract is an unambiguous, cheap-to-detect
 sign of misattribution - not a full semantic check, a specific known
@@ -110,7 +111,30 @@ SCENARIOS = [
 ]
 
 _UNRESOLVED_TOKEN_RE = re.compile(r"\[T\d+\]")
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+
+# Each anomaly code as the literal code OR a common Italian paraphrase of it.
+# Added 2026-10-20 after the literal-only version missed a real
+# misattribution worded as "una valenza insolita" (UNUSUAL_VALUE). Still a
+# finite list, not semantic matching - widens the net, doesn't close it.
+_ANOMALY_PATTERNS = {
+    "EXPIRED": re.compile(r"EXPIRED\b|scadut[oaie]", re.IGNORECASE),
+    "EXPIRING_SOON": re.compile(r"EXPIRING_SOON|in scadenza|scade a breve|prossim\w* (alla )?scadenza", re.IGNORECASE),
+    "UNUSUAL_VALUE": re.compile(
+        r"UNUSUAL_VALUE|(valor|valenz|import)\w* (insolit|anomal|inusual|fuori)", re.IGNORECASE,
+    ),
+    "NO_END_DATE": re.compile(
+        r"NO_END_DATE|senza (una )?data di (fine|scadenza)|data di (fine|scadenza) (mancante|assente)",
+        re.IGNORECASE,
+    ),
+}
+
+# "presenta due anomalie" about a contract that has one - the DOMINANT shape
+# in a 21-run batch on 2026-10-20 (5/7 open-phrasing runs), and one the
+# per-code check above can't see when the invented second anomaly isn't a
+# recognizable code at all ("due anomalie: EXPIRED e possibili altri").
+_COUNT_WORDS = {"un": 1, "una": 1, "un'": 1, "due": 2, "tre": 3, "quattro": 4}
+_ANOMALY_COUNT_RE = re.compile(r"\b(un'|una|un|due|tre|quattro|\d+)\s*anomali[ae]\b", re.IGNORECASE)
 
 
 def unresolved_tokens(answer: str) -> list[str]:
@@ -118,36 +142,49 @@ def unresolved_tokens(answer: str) -> list[str]:
 
 
 def anomaly_misattributions(answer: str, risk_scores: list) -> list[str]:
-    """Sentence-level heuristic, not a parser: for each sentence that names
-    a contract, flags any OTHER contract's anomaly code mentioned in that
-    same sentence - the exact shape of the error observed live on
-    2026-10-19 ("Rossi Costruzioni ... EXPIRED e UNUSUAL_VALUE" when Rossi
-    only has EXPIRED). Only meaningful when scenarios give contracts
-    disjoint anomaly sets, as the ones above do.
+    """Sentence-level heuristic, not a parser: for each sentence about a
+    contract, flags any OTHER contract's anomaly mentioned in that same
+    sentence - the shape of the error observed live on 2026-10-19 ("Rossi
+    Costruzioni ... EXPIRED e UNUSUAL_VALUE" when Rossi only has EXPIRED).
+    Only meaningful when scenarios give contracts disjoint anomaly sets,
+    as the ones above do.
 
-    KNOWN BLIND SPOT, found the same day this was written: this only
-    matches the LITERAL code (e.g. "UNUSUAL_VALUE"). A live run produced
-    "Questo contratto presenta due anomalie: 'EXPIRED' e una valenza
-    insolita" - "valenza insolita" is an Italian paraphrase of
-    UNUSUAL_VALUE, attributed to the wrong contract, and this function
-    missed it because the literal code string never appeared. Catching a
-    paraphrase would need semantic matching (e.g. an LLM-as-judge comparing
-    the claimed anomaly against the real one), not a better regex - a
-    different kind of tool, not a bug to patch here. Treat a "0
-    misattributions" result as "no LITERAL-code misattribution found", not
-    as "the model never misattributes anything" - this script currently
-    cannot tell the difference."""
+    A sentence is "about" a contract if it names it, or - when it names
+    none - if the previous sentence named exactly one (the live case read
+    "Rossi Costruzioni ... . Questo contratto presenta due anomalie: ...").
+    Anomalies match by literal code or a known Italian paraphrase
+    (_ANOMALY_PATTERNS). Both widen the original literal-code, named-only
+    check (2026-10-20), but a "0 misattributions" result still means "none
+    of these known shapes found", not "the model never misattributes
+    anything" - a paraphrase outside the list would still slip through."""
     all_anomalies = {code for item in risk_scores for code in item["anomalies"]}
-    sentences = _SENTENCE_SPLIT_RE.split(answer)
     issues = []
-    for sentence in sentences:
-        for item in risk_scores:
-            if item["customerName"] not in sentence:
-                continue
+    subjects: list[dict] = []
+    for sentence in _SENTENCE_SPLIT_RE.split(answer):
+        named = [item for item in risk_scores if item["customerName"] in sentence]
+        if named:
+            subjects = named
+        if len(subjects) != 1:
+            # Several contracts in one sentence ("Rossi e' scaduto, Bianchi ha
+            # un valore insolito") can't be split per contract by this
+            # heuristic - skip rather than flag a correct sentence.
+            continue
+        for item in subjects:
             not_its_own = all_anomalies - set(item["anomalies"])
-            wrongly_mentioned = [code for code in not_its_own if code in sentence]
+            wrongly_mentioned = sorted(
+                code for code in not_its_own
+                if code in _ANOMALY_PATTERNS and _ANOMALY_PATTERNS[code].search(sentence)
+            )
             if wrongly_mentioned:
-                issues.append(f"{item['customerName']}: sentence also names {wrongly_mentioned} (not its own)")
+                issues.append(f"{item['customerName']}: {sentence.strip()!r} mentions {wrongly_mentioned} (not its own)")
+            for match in _ANOMALY_COUNT_RE.finditer(sentence):
+                word = match.group(1).lower()
+                claimed = int(word) if word.isdigit() else _COUNT_WORDS[word]
+                if claimed != len(item["anomalies"]):
+                    issues.append(
+                        f"{item['customerName']}: {sentence.strip()!r} claims {claimed} anomalies "
+                        f"(has {len(item['anomalies'])})"
+                    )
     return issues
 
 
@@ -206,9 +243,10 @@ def main() -> None:
                 print()
 
     print("=== Summary ===")
-    print("(misattribution count only catches literal anomaly codes, not Italian "
-          "paraphrases like 'valenza insolita' for UNUSUAL_VALUE - see anomaly_misattributions' "
-          "docstring; a low count is not proof the model never misattributes anything)")
+    print("(misattribution detection is a heuristic - literal codes, a fixed list of Italian "
+          "paraphrases and claimed counts; it can miss other wordings and occasionally "
+          "false-positive on summary sentences - see anomaly_misattributions' docstring. "
+          "Read the answers before trusting the count.)")
     for model in models:
         model_results = [r for r in results if r["model"] == model]
         if not model_results:

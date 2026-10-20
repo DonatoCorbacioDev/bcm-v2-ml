@@ -350,8 +350,27 @@ def test_templatize_risk_scores_replaces_score_with_a_token():
     placeholders = {}
     counter = itertools.count(1)
     result = _templatize_risk_scores(risk_scores, placeholders, counter)
-    assert result == [{"customerName": "Acme", "contractId": 1, "riskScore": "[T1]", "level": "HIGH", "anomalies": []}]
+    assert result == [{
+        "summary": "Acme (contract #1): risk score [T1], level HIGH, 0 anomalies: none",
+        "customerName": "Acme", "contractId": 1, "riskScore": "[T1]", "level": "HIGH", "anomalies": [],
+    }]
     assert placeholders == {"[T1]": "0.91"}
+
+
+def test_templatize_risk_scores_summary_states_each_contracts_own_anomaly_count():
+    # Regression test: the model used to give the top contract its
+    # neighbor's anomaly count - each record must state its own, by name.
+    risk_scores = [
+        {"customerName": "Rossi", "contractId": 101, "riskScore": 0.91, "level": "HIGH", "anomalies": ["EXPIRED"]},
+        {"customerName": "Bianchi", "contractId": 102, "riskScore": 0.72, "level": "HIGH",
+         "anomalies": ["EXPIRED", "UNUSUAL_VALUE"]},
+    ]
+    result = _templatize_risk_scores(risk_scores, {}, itertools.count(1))
+    assert list(result[0])[0] == "summary"  # first key: read before the raw fields
+    assert result[0]["summary"] == "Rossi (contract #101): risk score [T1], level HIGH, 1 anomaly: EXPIRED"
+    assert result[1]["summary"] == (
+        "Bianchi (contract #102): risk score [T2], level HIGH, 2 anomalies: EXPIRED, UNUSUAL_VALUE"
+    )
 
 
 def test_templatize_risk_scores_gives_each_contract_its_own_token():
