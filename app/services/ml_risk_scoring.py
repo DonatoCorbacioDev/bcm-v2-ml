@@ -22,7 +22,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..models import Contract, FinancialValue
-from .risk_features import STATUS_CODE, LEVEL_MAP, build_feature_row
+from .risk_features import STATUS_CODE, LEVEL_MAP, SCORED_STATUSES, build_feature_row
 from .risk_features import build_org_stats as _build_org_stats
 
 logger = logging.getLogger(__name__)
@@ -115,17 +115,22 @@ def compute_ml_risk_scores(db: Session, org_id: int | None = None, manager_id: i
     # two never compute this differently — see risk_scoring._build_org_stats)
     org_stats = _build_org_stats(contracts, contract_totals)
 
-    X = _build_feature_matrix(contracts, contract_totals, contract_stds, contract_counts, org_stats)
+    scored = [c for c in contracts if c.status in SCORED_STATUSES]
+    if not scored:
+        return {}
+    scored_ids = [c.id for c in scored]
+
+    X = _build_feature_matrix(scored, contract_totals, contract_stds, contract_counts, org_stats)
 
     try:
         probs = model.predict_proba(X)   # shape (n, 3): P(LOW), P(MEDIUM), P(HIGH)
         preds = model.predict(X)
         return {
-            contract_ids[i]: {
+            scored_ids[i]: {
                 "mlScore": round(float(probs[i][2]), 4),   # P(HIGH)
                 "mlLevel": LEVEL_MAP.get(int(preds[i]), "LOW"),
             }
-            for i in range(len(contract_ids))
+            for i in range(len(scored_ids))
         }
     except Exception as exc:
         logger.warning("ML prediction failed: %s", exc)

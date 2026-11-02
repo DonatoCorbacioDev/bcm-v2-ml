@@ -32,6 +32,13 @@ FEATURES = [
 # Must match the `status` column values written by the backend (Contracts.status).
 STATUS_CODE = {"ACTIVE": 0, "EXPIRED": 1, "CANCELLED": 2, "DRAFT": 3}
 
+# Contracts that still get a risk score. A CANCELLED or EXPIRED contract has
+# nothing left to act on (expired ones already have their own dashboard
+# counter), so scoring them only put closed contracts among "high risk"
+# recommendations. They still count in build_org_stats' baseline, which is
+# computed over every status at training time too.
+SCORED_STATUSES = frozenset({"ACTIVE", "DRAFT"})
+
 CLASS_NAMES = ["LOW", "MEDIUM", "HIGH"]
 LEVEL_MAP = dict(enumerate(CLASS_NAMES))
 

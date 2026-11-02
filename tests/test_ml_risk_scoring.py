@@ -205,7 +205,9 @@ class TestComputeMlRiskScores:
 
     def test_high_risk_contract_maps_correctly(self):
         past = date.today() - timedelta(days=5)
-        contracts = [_make_contract(1, status="EXPIRED", end_date=past, org_id=1)]
+        # ACTIVE with a past end date: the nightly scheduler hasn't marked it
+        # EXPIRED yet, so it is still scored.
+        contracts = [_make_contract(1, status="ACTIVE", end_date=past, org_id=1)]
 
         mock_model = MagicMock()
         mock_model.predict_proba.return_value = np.array([[0.05, 0.10, 0.85]])
@@ -227,6 +229,50 @@ class TestComputeMlRiskScores:
 
         assert result[1]["mlScore"] == pytest.approx(0.85, abs=1e-4)
         assert result[1]["mlLevel"] == "HIGH"
+
+    def test_skips_cancelled_and_expired_contracts(self):
+        future = date.today() + timedelta(days=100)
+        past = date.today() - timedelta(days=10)
+        contracts = [
+            _make_contract(1, status="ACTIVE", end_date=future),
+            _make_contract(2, status="CANCELLED", end_date=past),
+            _make_contract(3, status="DRAFT", end_date=future),
+            _make_contract(4, status="EXPIRED", end_date=past),
+        ]
+
+        mock_model = MagicMock()
+        mock_model.predict_proba.return_value = np.array([[0.7, 0.2, 0.1], [0.1, 0.2, 0.7]])
+        mock_model.predict.return_value = np.array([0, 2])
+
+        db = MagicMock()
+        db.query.return_value.filter.return_value.all.return_value = contracts
+        db.query.return_value.filter.return_value.group_by.return_value.all.return_value = []
+
+        with patch.object(ml_risk_scoring, "_load_model", return_value=mock_model):
+            result = ml_risk_scoring.compute_ml_risk_scores(db, org_id=1)
+
+        # Only ACTIVE/DRAFT rows reach the model, and each score lands on the
+        # right contract id.
+        assert mock_model.predict_proba.call_args.args[0].shape[0] == 2
+        assert result == {
+            1: {"mlScore": 0.1, "mlLevel": "LOW"},
+            3: {"mlScore": 0.7, "mlLevel": "HIGH"},
+        }
+
+    def test_returns_empty_dict_when_only_closed_contracts(self):
+        past = date.today() - timedelta(days=10)
+        contracts = [_make_contract(1, status="CANCELLED", end_date=past)]
+
+        mock_model = MagicMock()
+        db = MagicMock()
+        db.query.return_value.filter.return_value.all.return_value = contracts
+        db.query.return_value.filter.return_value.group_by.return_value.all.return_value = []
+
+        with patch.object(ml_risk_scoring, "_load_model", return_value=mock_model):
+            result = ml_risk_scoring.compute_ml_risk_scores(db, org_id=1)
+
+        assert result == {}
+        mock_model.predict_proba.assert_not_called()
 
     def test_no_org_id_filter_queries_all_contracts(self):
         mock_model = MagicMock()

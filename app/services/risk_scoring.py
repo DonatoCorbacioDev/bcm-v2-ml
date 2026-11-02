@@ -7,6 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..models import Contract, FinancialValue
+from .risk_features import SCORED_STATUSES
 from .risk_features import build_org_stats as _build_org_stats
 
 
@@ -66,6 +67,8 @@ def compute_risk_scores(db: Session, org_id: int | None = None, manager_id: int 
 
     results = []
     for c in contracts:
+        if c.status not in SCORED_STATUSES:
+            continue
         expiry, expiry_anomalies = _expiry_score(c.end_date)
         total = contract_totals.get(c.id, 0.0)
         z, value_anomalies = _z_score(total, c.organization_id, org_stats)

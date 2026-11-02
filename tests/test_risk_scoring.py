@@ -11,11 +11,12 @@ class CounterpartyMock:
 
 
 class ContractMock:
-    def __init__(self, id, name, end_date, org_id):
+    def __init__(self, id, name, end_date, org_id, status="ACTIVE"):
         self.id = id
         self.counterparty = CounterpartyMock(name)
         self.end_date = end_date
         self.organization_id = org_id
+        self.status = status
 
 
 class FVRowMock:
@@ -176,6 +177,45 @@ def test_compute_risk_scores_unusual_value():
     result = compute_risk_scores(make_risk_session(contracts, fv_rows))
     outlier = next(r for r in result if r["contractId"] == 6)
     assert "UNUSUAL_VALUE" in outlier["anomalies"]
+
+
+def test_compute_risk_scores_skips_cancelled_and_expired_contracts():
+    # Regression test: a cancelled contract with a past end date showed up as
+    # "HIGH / EXPIRED" in the dashboard's recommended actions.
+    today = date.today()
+    contracts = [
+        ContractMock(1, "Active", today + timedelta(days=15), 1, status="ACTIVE"),
+        ContractMock(2, "Draft", today + timedelta(days=365), 1, status="DRAFT"),
+        ContractMock(3, "Cancelled", today - timedelta(days=10), 1, status="CANCELLED"),
+        ContractMock(4, "Expired", today - timedelta(days=10), 1, status="EXPIRED"),
+    ]
+    fv_rows = [FVRowMock(c.id, 10000.0) for c in contracts]
+    result = compute_risk_scores(make_risk_session(contracts, fv_rows))
+    assert sorted(r["contractId"] for r in result) == [1, 2]
+
+
+def test_compute_risk_scores_keeps_closed_contracts_in_value_baseline():
+    # Closed contracts are not scored but still shape the org's value
+    # baseline, same as at training time: without the four cancelled
+    # contracts at 1000, the 100000 contract would not stand out.
+    today = date.today()
+    far = today + timedelta(days=365)
+    contracts = [ContractMock(i, f"Old{i}", far, 1, status="CANCELLED") for i in range(1, 5)]
+    contracts.append(ContractMock(5, "Normal", far, 1))
+    contracts.append(ContractMock(6, "Outlier", far, 1))
+    fv_rows = [FVRowMock(i, 1000.0) for i in range(1, 6)]
+    fv_rows.append(FVRowMock(6, 100000.0))
+    result = compute_risk_scores(make_risk_session(contracts, fv_rows))
+    assert sorted(r["contractId"] for r in result) == [5, 6]
+    outlier = next(r for r in result if r["contractId"] == 6)
+    assert "UNUSUAL_VALUE" in outlier["anomalies"]
+
+
+def test_compute_risk_scores_only_closed_contracts_returns_empty():
+    today = date.today()
+    contracts = [ContractMock(1, "Cancelled", today - timedelta(days=10), 1, status="CANCELLED")]
+    fv_rows = [FVRowMock(1, 10000.0)]
+    assert compute_risk_scores(make_risk_session(contracts, fv_rows)) == []
 
 
 def make_org_risk_session(contracts, fv_rows):
