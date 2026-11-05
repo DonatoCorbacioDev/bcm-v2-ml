@@ -2,15 +2,20 @@
 
 FastAPI ML service for the BCM (Business Contracts Manager) platform. It connects
 read-only to the shared MySQL database and exposes statistical/AI endpoints used
-by the Spring Boot backend and the Next.js frontend.
+by the Spring Boot backend.
+
+> **Status: not used by the public demo, being redone.** The risk score is
+> trained on labels derived from the same rule-based formula it is meant to
+> improve on, and the data behind it is synthetic: not reliable enough to alert
+> a real customer. So the backend's daily high-risk notifications are off by
+> default (`ml.risk-notifications.enabled`) and the dashboard widgets that
+> used this service are hidden. The service will be rebuilt around problems
+> BCM actually has, starting from the labelled contract clauses in
+> [bcm-v2-backend](https://github.com/DonatoCorbacioDev/bcm-v2-backend#what-is-switched-off-and-why),
+> measured against a rule-based baseline on blind test sets.
 
 For methodology, performance metrics, training data, and limitations of every
 model this service uses, see [MODEL_CARD.md](./MODEL_CARD.md).
-
-This service has no UI of its own — see the
-[bcm-v2-frontend](https://github.com/DonatoCorbacioDev/bcm-v2-frontend#-screenshots)
-README for screenshots of the risk scores, forecasts, and anomalies it produces
-rendered in the dashboard.
 
 ## Architecture
 
