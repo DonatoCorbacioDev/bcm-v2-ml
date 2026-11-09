@@ -20,6 +20,12 @@ async def lifespan(_: FastAPI):
             "ENVIRONMENT=production but INTERNAL_API_KEY is unset. "
             "Set INTERNAL_API_KEY to a strong random value to secure the ML API endpoints."
         )
+    if settings.ENVIRONMENT == "production" and not settings.INTERNAL_CLAIMS_PUBLIC_KEY:
+        raise RuntimeError(
+            "ENVIRONMENT=production but INTERNAL_CLAIMS_PUBLIC_KEY is unset. "
+            "Without it org_id/manager_id would be taken from the query string "
+            "instead of the backend-signed claims."
+        )
     yield
 
 

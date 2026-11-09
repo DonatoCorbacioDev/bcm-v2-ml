@@ -167,9 +167,18 @@ def test_lifespan_raises_when_production_without_internal_api_key(monkeypatch):
         asyncio.run(coro)
 
 
+def test_lifespan_raises_when_production_without_claims_public_key(monkeypatch):
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "INTERNAL_API_KEY", "secret")
+    monkeypatch.setattr(settings, "INTERNAL_CLAIMS_PUBLIC_KEY", "")
+    with pytest.raises(RuntimeError, match="INTERNAL_CLAIMS_PUBLIC_KEY is unset"):
+        asyncio.run(_run_lifespan())
+
+
 def test_lifespan_no_warning_when_internal_api_key_set(monkeypatch, caplog):
     monkeypatch.setattr(settings, "ENVIRONMENT", "production")
     monkeypatch.setattr(settings, "INTERNAL_API_KEY", "secret")
+    monkeypatch.setattr(settings, "INTERNAL_CLAIMS_PUBLIC_KEY", "public-key")
     with caplog.at_level(logging.WARNING):
         asyncio.run(_run_lifespan())
     assert not any("INTERNAL_API_KEY is unset" in r.message for r in caplog.records)
