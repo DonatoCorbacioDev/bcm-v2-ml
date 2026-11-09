@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from ..models import Contract, FinancialValue
 from .risk_features import SCORED_STATUSES
 from .risk_features import build_org_stats as _build_org_stats
+from .scope import require_org
 
 
 def _expiry_score(end_date) -> tuple[float, list[str]]:
@@ -43,24 +44,23 @@ def _level(score: float) -> str:
     return "LOW"
 
 
-def compute_risk_scores(db: Session, org_id: int | None = None, manager_id: int | None = None) -> list:
-    contracts_query = db.query(Contract)
+def compute_risk_scores(db: Session, org_id: int | None, manager_id: int | None = None) -> list:
+    org_id = require_org(org_id)
+    contracts_query = db.query(Contract).filter(Contract.organization_id == org_id)
     if manager_id is not None:
         contracts_query = contracts_query.filter(Contract.manager_id == manager_id)
-    elif org_id is not None:
-        contracts_query = contracts_query.filter(Contract.organization_id == org_id)
     contracts = contracts_query.all()
     if not contracts:
         return []
 
-    fv_query = db.query(FinancialValue.contract_id, func.sum(FinancialValue.financial_amount).label("total"))
+    fv_query = db.query(FinancialValue.contract_id, func.sum(FinancialValue.financial_amount).label("total")).filter(
+        FinancialValue.organization_id == org_id
+    )
     if manager_id is not None:
         # FinancialValue has no manager_id of its own — restrict totals to the
         # already-scoped contracts list instead.
         contract_ids = [c.id for c in contracts]
         fv_query = fv_query.filter(FinancialValue.contract_id.in_(contract_ids))
-    elif org_id is not None:
-        fv_query = fv_query.filter(FinancialValue.organization_id == org_id)
     fv_rows = fv_query.group_by(FinancialValue.contract_id).all()
     contract_totals = {row.contract_id: float(row.total) for row in fv_rows}
     org_stats = _build_org_stats(contracts, contract_totals)

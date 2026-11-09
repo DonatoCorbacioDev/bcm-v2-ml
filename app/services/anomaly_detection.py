@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..models import Contract, Counterparty, FinancialValue
+from .scope import require_org
 
 _MIN_RECORDS = 5
 _CONTAMINATION = 0.1
@@ -34,13 +35,14 @@ def _severity(score: float) -> str:
     return "LOW"
 
 
-def compute_anomalies(db: Session, org_id: int | None = None, manager_id: int | None = None) -> list[dict]:
+def compute_anomalies(db: Session, org_id: int | None, manager_id: int | None = None) -> list[dict]:
     """Return financial records flagged as anomalous by Isolation Forest.
 
     Uses financial_amount and cyclical month encoding as features.
     Returns an empty list when fewer than _MIN_RECORDS records exist.
     Results are sorted by anomalyScore ascending (most anomalous first).
     """
+    org_id = require_org(org_id)
     stmt = (
         select(
             FinancialValue.id,
@@ -52,11 +54,10 @@ def compute_anomalies(db: Session, org_id: int | None = None, manager_id: int | 
         )
         .join(Contract, FinancialValue.contract_id == Contract.id)
         .join(Counterparty, Contract.counterparty_id == Counterparty.id)
+        .where(FinancialValue.organization_id == org_id)
     )
     if manager_id is not None:
         stmt = stmt.where(Contract.manager_id == manager_id)
-    elif org_id is not None:
-        stmt = stmt.where(FinancialValue.organization_id == org_id)
 
     rows = db.execute(stmt).all()
     if len(rows) < _MIN_RECORDS:

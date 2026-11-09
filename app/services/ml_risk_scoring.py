@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from ..models import Contract, FinancialValue
 from .risk_features import STATUS_CODE, LEVEL_MAP, SCORED_STATUSES, build_feature_row
 from .risk_features import build_org_stats as _build_org_stats
+from .scope import require_org
 
 logger = logging.getLogger(__name__)
 
@@ -74,22 +75,21 @@ def _build_feature_matrix(
     return np.array(rows, dtype=float) if rows else np.empty((0, 7))
 
 
-def compute_ml_risk_scores(db: Session, org_id: int | None = None, manager_id: int | None = None) -> dict:
+def compute_ml_risk_scores(db: Session, org_id: int | None, manager_id: int | None = None) -> dict:
     """
     Returns a dict keyed by contract_id:
         {contract_id: {"mlScore": float, "mlLevel": str}}
 
     Returns an empty dict if the model is not loaded or the query returns no data.
     """
+    org_id = require_org(org_id)
     model = _load_model()
     if model is None:
         return {}
 
-    contracts_query = db.query(Contract)
+    contracts_query = db.query(Contract).filter(Contract.organization_id == org_id)
     if manager_id is not None:
         contracts_query = contracts_query.filter(Contract.manager_id == manager_id)
-    elif org_id is not None:
-        contracts_query = contracts_query.filter(Contract.organization_id == org_id)
     contracts = contracts_query.all()
     if not contracts:
         return {}

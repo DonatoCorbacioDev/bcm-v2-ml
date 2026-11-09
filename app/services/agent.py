@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..models import Contract
 from . import forecasting, risk_scoring
+from .scope import require_org
 
 TOP_RISK_CONTRACTS = 5
 
@@ -221,8 +222,9 @@ def _call_ollama(prompt: str) -> str:
 
 
 def generate_insights(
-    db: Session, months: int, org_id: int | None = None, manager_id: int | None = None
+    db: Session, months: int, org_id: int | None, manager_id: int | None = None
 ) -> dict:
+    org_id = require_org(org_id)
     risk_scores = risk_scoring.compute_risk_scores(db, org_id, manager_id)
     forecast = forecasting.compute_forecast(db, months, org_id, manager_id)
 
@@ -266,19 +268,18 @@ def _run_tool(
 def _propose_reminder(
     arguments: dict, db: Session, org_id: int | None, manager_id: int | None = None
 ) -> dict:
+    org_id = require_org(org_id)
     contract_id = arguments.get("contract_id")
     message = str(arguments.get("message") or "").strip()
     if not contract_id or not message:
         return {"error": "contract_id and message are required"}
 
-    # Scoped by manager_id/org_id exactly like every read tool above — a
+    # Scoped by org_id (and manager_id) exactly like every read tool above — a
     # contract_id the model saw (or guessed) for a different manager/org must
     # resolve to nothing, never leak that customer name into this response.
-    query = db.query(Contract).filter(Contract.id == contract_id)
+    query = db.query(Contract).filter(Contract.id == contract_id, Contract.organization_id == org_id)
     if manager_id is not None:
         query = query.filter(Contract.manager_id == manager_id)
-    elif org_id is not None:
-        query = query.filter(Contract.organization_id == org_id)
     contract = query.first()
     if contract is None:
         return {"error": f"Contract {contract_id} not found"}
@@ -400,7 +401,7 @@ def _finalize_answer(content: str | None, placeholders: dict, proposed_action: d
 
 
 def ask_agent(
-    db: Session, question: str, org_id: int | None = None, manager_id: int | None = None
+    db: Session, question: str, org_id: int | None, manager_id: int | None = None
 ) -> dict:
     """Answers a free-text question by letting the model call read-only tools
     (risk scores, forecast) grounded in the caller's own data, instead of
@@ -416,6 +417,7 @@ def ask_agent(
     single `placeholders` map and token counter are shared across every
     tool call this question triggers, so two different tool calls in the
     same conversation never collide on the same token number."""
+    org_id = require_org(org_id)
     messages = [
         {
             "role": "system",

@@ -18,6 +18,7 @@ from prophet import Prophet
 from sqlalchemy.orm import Session
 
 from ..models import Contract, FinancialValue
+from .scope import require_org
 
 # Prophet / Stan emit verbose INFO logs during fitting — suppress them.
 logging.getLogger("prophet").setLevel(logging.ERROR)
@@ -78,21 +79,21 @@ def _prophet_forecast(df: pd.DataFrame, h: int) -> list[dict]:
 
 
 def compute_forecast(
-    db: Session, months: int, org_id: int | None = None, manager_id: int | None = None
+    db: Session, months: int, org_id: int | None, manager_id: int | None = None
 ) -> dict:
     """Return historical monthly totals and a Prophet forecast for N months ahead.
 
     When manager_id is given, the series is restricted to that manager's own
     contracts (a join against Contract is needed since FinancialValue has no
-    manager_id of its own) instead of the whole organization.
+    manager_id of its own), inside the organization, instead of the whole
+    organization.
     """
-    query = db.query(FinancialValue)
+    org_id = require_org(org_id)
+    query = db.query(FinancialValue).filter(FinancialValue.organization_id == org_id)
     if manager_id is not None:
         query = query.join(Contract, FinancialValue.contract_id == Contract.id).filter(
             Contract.manager_id == manager_id
         )
-    elif org_id is not None:
-        query = query.filter(FinancialValue.organization_id == org_id)
     rows = query.all()
 
     if not rows:

@@ -274,21 +274,21 @@ class TestComputeMlRiskScores:
         assert result == {}
         mock_model.predict_proba.assert_not_called()
 
-    def test_no_org_id_filter_queries_all_contracts(self):
+    def test_refuses_without_org_id(self):
+        # No organization never means "every organization".
         mock_model = MagicMock()
         with patch.object(ml_risk_scoring, "_load_model", return_value=mock_model):
             db = MagicMock()
-            db.query.return_value.all.return_value = []
-            ml_risk_scoring.compute_ml_risk_scores(db, org_id=None)
-        # Without org_id, .filter() should NOT be called on Contract query
-        db.query.return_value.filter.assert_not_called()
+            with pytest.raises(ValueError):
+                ml_risk_scoring.compute_ml_risk_scores(db, org_id=None)
+        db.query.assert_not_called()
 
-    def test_manager_id_takes_precedence_over_org_id(self):
-        # Regression test: a MANAGER caller must be scoped by manager_id, never
-        # fall back to the whole org's contracts.
+    def test_manager_id_narrows_the_organization(self):
+        # A MANAGER caller keeps the organization filter and adds its own.
         mock_model = MagicMock()
         with patch.object(ml_risk_scoring, "_load_model", return_value=mock_model):
             db = MagicMock()
-            db.query.return_value.filter.return_value.all.return_value = []
+            db.query.return_value.filter.return_value.filter.return_value.all.return_value = []
             ml_risk_scoring.compute_ml_risk_scores(db, org_id=1, manager_id=42)
         db.query.return_value.filter.assert_called_once()
+        db.query.return_value.filter.return_value.filter.assert_called_once()

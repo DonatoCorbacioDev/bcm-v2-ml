@@ -123,3 +123,26 @@ def test_claims_ignore_query_params_when_key_configured(monkeypatch, keypair):
 
     assert claims.org_id == 7
     assert claims.manager_id is None
+
+
+def test_claims_reject_a_valid_token_without_organization(monkeypatch, keypair):
+    # Correctly signed by the backend's key, but no orgId: refused, never
+    # turned into "every organization".
+    private_key, public_b64 = keypair
+    monkeypatch.setattr(settings, "INTERNAL_CLAIMS_PUBLIC_KEY", public_b64)
+    token = _sign(private_key, org_id=None, manager_id=42)
+
+    with pytest.raises(HTTPException) as exc:
+        verify_internal_claims(org_id=7, manager_id=None, x_internal_claims=token)
+
+    assert exc.value.status_code == 401
+    assert exc.value.detail == "Missing organization in internal claims"
+
+
+def test_claims_reject_missing_org_query_param_when_no_key_configured(monkeypatch):
+    monkeypatch.setattr(settings, "INTERNAL_CLAIMS_PUBLIC_KEY", "")
+
+    with pytest.raises(HTTPException) as exc:
+        verify_internal_claims(org_id=None, manager_id=42, x_internal_claims=None)
+
+    assert exc.value.status_code == 401

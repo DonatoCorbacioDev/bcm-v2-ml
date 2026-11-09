@@ -1,3 +1,4 @@
+import pytest
 import itertools
 from unittest.mock import MagicMock, patch
 
@@ -194,7 +195,7 @@ def test_generate_insights_success():
     with patch("app.services.agent.risk_scoring.compute_risk_scores", return_value=risk_scores), \
          patch("app.services.agent.forecasting.compute_forecast", return_value=forecast), \
          patch("app.services.agent._call_ollama", return_value="Generated report"):
-        result = generate_insights(db, 3)
+        result = generate_insights(db, 3, org_id=1)
     assert result["riskScores"] == risk_scores
     assert result["forecast"] == forecast
     assert result["report"] == "Generated report"
@@ -206,7 +207,7 @@ def test_generate_insights_ollama_unavailable():
     with patch("app.services.agent.risk_scoring.compute_risk_scores", return_value=[]), \
          patch("app.services.agent.forecasting.compute_forecast", return_value={"historical": [], "forecast": []}), \
          patch("app.services.agent._call_ollama", side_effect=httpx.ConnectError("refused")):
-        result = generate_insights(db, 3)
+        result = generate_insights(db, 3, org_id=1)
     assert result["report"] is None
     assert "Servizio AI non disponibile" in result["error"]
 
@@ -218,7 +219,7 @@ def test_generate_insights_handles_malformed_ollama_json():
     with patch("app.services.agent.risk_scoring.compute_risk_scores", return_value=[]), \
          patch("app.services.agent.forecasting.compute_forecast", return_value={"historical": [], "forecast": []}), \
          patch("app.services.agent._call_ollama", side_effect=ValueError("Expecting value: line 1 column 1")):
-        result = generate_insights(db, 3)
+        result = generate_insights(db, 3, org_id=1)
     assert result["report"] is None
     assert "Servizio AI non disponibile" in result["error"]
 
@@ -230,7 +231,7 @@ def test_generate_insights_handles_unexpected_ollama_response_shape():
     with patch("app.services.agent.risk_scoring.compute_risk_scores", return_value=[]), \
          patch("app.services.agent.forecasting.compute_forecast", return_value={"historical": [], "forecast": []}), \
          patch("app.services.agent._call_ollama", side_effect=KeyError("response")):
-        result = generate_insights(db, 3)
+        result = generate_insights(db, 3, org_id=1)
     assert result["report"] is None
     assert "Servizio AI non disponibile" in result["error"]
 
@@ -640,7 +641,8 @@ def test_propose_reminder_requires_contract_id_and_message():
 def test_propose_reminder_scopes_lookup_by_org_id():
     db = MagicMock()
     contract = ContractMock(1, "Acme")
-    db.query.return_value.filter.return_value.filter.return_value.first.return_value = contract
+    # One filter: the contract id AND the caller's organization together.
+    db.query.return_value.filter.return_value.first.return_value = contract
 
     result = _run_tool("propose_reminder", {"contract_id": 1, "message": "Rinnovo in scadenza"}, db, org_id=7)
 
@@ -658,7 +660,7 @@ def test_propose_reminder_returns_error_when_contract_not_in_org():
     """A contract_id belonging to another organization must resolve to nothing —
     never leak that other org's customer name into the tool result."""
     db = MagicMock()
-    db.query.return_value.filter.return_value.filter.return_value.first.return_value = None
+    db.query.return_value.filter.return_value.first.return_value = None
 
     result = _run_tool("propose_reminder", {"contract_id": 999, "message": "hi"}, db, org_id=7)
 
@@ -666,10 +668,9 @@ def test_propose_reminder_returns_error_when_contract_not_in_org():
     assert "proposedAction" not in result
 
 
-def test_propose_reminder_scopes_lookup_by_manager_id_over_org_id():
-    """Regression test: when both are given (a MANAGER caller), manager_id
-    must be the scope actually applied — matches _propose_reminder's org_id
-    precedence contract."""
+def test_propose_reminder_manager_id_narrows_the_organization():
+    """A MANAGER caller keeps the organization filter and adds its own: the
+    manager narrows the organization, it never replaces it."""
     db = MagicMock()
     contract = ContractMock(1, "Acme")
     db.query.return_value.filter.return_value.filter.return_value.first.return_value = contract
@@ -679,8 +680,8 @@ def test_propose_reminder_scopes_lookup_by_manager_id_over_org_id():
     )
 
     assert result["proposedAction"]["contractId"] == 1
-    # Exactly one scoping .filter() beyond the id filter — proves org_id's
-    # branch was skipped in favor of manager_id's.
+    # The id+organization filter, then exactly one manager filter on top.
+    db.query.return_value.filter.assert_called_once()
     db.query.return_value.filter.return_value.filter.assert_called_once()
 
 
@@ -698,14 +699,24 @@ def test_propose_reminder_returns_error_when_contract_not_managers():
     assert "proposedAction" not in result
 
 
-def test_propose_reminder_without_org_id_still_looks_up_the_contract():
+def test_propose_reminder_refuses_without_org_id():
+    # No organization never means "every organization".
     db = MagicMock()
-    contract = ContractMock(2, "Beta")
-    db.query.return_value.filter.return_value.first.return_value = contract
+    with pytest.raises(ValueError):
+        _run_tool("propose_reminder", {"contract_id": 2, "message": "hi"}, db, org_id=None)
+    db.query.assert_not_called()
 
-    result = _run_tool("propose_reminder", {"contract_id": 2, "message": "hi"}, db, org_id=None)
 
-    assert result["proposedAction"]["contractId"] == 2
+def test_ask_agent_and_insights_refuse_without_org_id():
+    db = MagicMock()
+    with patch("app.services.agent._call_ollama_chat") as chat, patch("app.services.agent._call_ollama") as gen:
+        with pytest.raises(ValueError):
+            ask_agent(db, "Any question", org_id=None)
+        with pytest.raises(ValueError):
+            generate_insights(db, 3, org_id=None)
+    chat.assert_not_called()
+    gen.assert_not_called()
+    db.query.assert_not_called()
 
 
 # ── ask_agent surfaces proposedAction ──────────────────────────────────────────
@@ -722,7 +733,7 @@ def test_ask_agent_surfaces_proposed_action_alongside_the_answer():
     final_answer = {"role": "assistant", "content": "Ho preparato un promemoria, confermi?"}
     contract = ContractMock(1, "Acme")
     with patch("app.services.agent._call_ollama_chat", side_effect=[tool_request, final_answer]):
-        db.query.return_value.filter.return_value.filter.return_value.first.return_value = contract
+        db.query.return_value.filter.return_value.first.return_value = contract
         result = ask_agent(db, "Ricordami di rinnovare il contratto Acme", org_id=7)
 
     assert result["answer"] == "Ho preparato un promemoria, confermi?"

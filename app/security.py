@@ -44,9 +44,12 @@ def verify_internal_claims(
     When no public key is configured (local dev), falls back to trusting the
     query params directly, matching verify_internal_api_key's empty-key
     dev posture.
+
+    Either way a scope without an organization is refused (401): no
+    organization never means "every organization".
     """
     if not settings.INTERNAL_CLAIMS_PUBLIC_KEY:
-        return InternalClaims(org_id=org_id, manager_id=manager_id)
+        return _require_org_scope(InternalClaims(org_id=org_id, manager_id=manager_id))
 
     if not x_internal_claims:
         raise HTTPException(
@@ -64,4 +67,13 @@ def verify_internal_claims(
             detail="Invalid internal claims",
         ) from exc
 
-    return InternalClaims(org_id=payload.get("orgId"), manager_id=payload.get("managerId"))
+    return _require_org_scope(InternalClaims(org_id=payload.get("orgId"), manager_id=payload.get("managerId")))
+
+
+def _require_org_scope(claims: InternalClaims) -> InternalClaims:
+    if claims.org_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing organization in internal claims",
+        )
+    return claims
