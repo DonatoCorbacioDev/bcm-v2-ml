@@ -1,5 +1,6 @@
 """Unit tests for app/services/ml_risk_scoring.py"""
 
+from tests.ids import uid
 from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -18,7 +19,7 @@ from app.services.ml_risk_scoring import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_contract(cid, status="ACTIVE", end_date=None, org_id=1):
+def _make_contract(cid, status="ACTIVE", end_date=None, org_id=uid(1)):
     c = MagicMock()
     c.id = cid
     c.status = status
@@ -67,13 +68,13 @@ class TestBuildFeatureMatrix:
         assert X[0, 1] == float(STATUS_CODE["EXPIRED"])
 
     def test_z_score_computed_from_org_stats(self):
-        c = _make_contract(1, org_id=5)
-        org_stats = {5: (5000.0, 1000.0)}
+        c = _make_contract(1, org_id=uid(5))
+        org_stats = {uid(5): (5000.0, 1000.0)}
         X = _build_feature_matrix([c], {1: 7000.0}, {}, {}, org_stats)
         assert X[0, 6] == pytest.approx(2.0)  # (7000 - 5000) / 1000
 
     def test_z_score_zero_when_no_org_stats(self):
-        c = _make_contract(1, org_id=99)
+        c = _make_contract(1, org_id=uid(99))
         X = _build_feature_matrix([c], {1: 5000.0}, {}, {}, {})
         assert X[0, 6] == pytest.approx(0.0)
 
@@ -142,7 +143,7 @@ class TestComputeMlRiskScores:
     def test_returns_empty_dict_when_model_not_loaded(self):
         with patch.object(ml_risk_scoring, "_load_model", return_value=None):
             db = MagicMock()
-            result = ml_risk_scoring.compute_ml_risk_scores(db, org_id=1)
+            result = ml_risk_scoring.compute_ml_risk_scores(db, org_id=uid(1))
         assert result == {}
 
     def test_returns_empty_dict_when_no_contracts(self):
@@ -151,12 +152,12 @@ class TestComputeMlRiskScores:
             db = MagicMock()
             db.query.return_value.filter.return_value.all.return_value = []
             db.query.return_value.all.return_value = []
-            result = ml_risk_scoring.compute_ml_risk_scores(db, org_id=1)
+            result = ml_risk_scoring.compute_ml_risk_scores(db, org_id=uid(1))
         assert result == {}
 
     def test_returns_ml_scores_for_contracts(self):
         future = date.today() + timedelta(days=200)
-        contracts = [_make_contract(1, end_date=future, org_id=1)]
+        contracts = [_make_contract(1, end_date=future, org_id=uid(1))]
 
         mock_model = MagicMock()
         mock_model.predict_proba.return_value = np.array([[0.6, 0.3, 0.1]])
@@ -174,7 +175,7 @@ class TestComputeMlRiskScores:
         db.query.return_value.filter.return_value.group_by.return_value.all.return_value = [fv_row]
 
         with patch.object(ml_risk_scoring, "_load_model", return_value=mock_model):
-            result = ml_risk_scoring.compute_ml_risk_scores(db, org_id=1)
+            result = ml_risk_scoring.compute_ml_risk_scores(db, org_id=uid(1))
 
         assert 1 in result
         assert result[1]["mlScore"] == pytest.approx(0.1, abs=1e-4)
@@ -199,7 +200,7 @@ class TestComputeMlRiskScores:
         db.query.return_value.filter.return_value.group_by.return_value.all.return_value = [fv_row]
 
         with patch.object(ml_risk_scoring, "_load_model", return_value=mock_model):
-            result = ml_risk_scoring.compute_ml_risk_scores(db, org_id=1)
+            result = ml_risk_scoring.compute_ml_risk_scores(db, org_id=uid(1))
 
         assert result == {}
 
@@ -207,7 +208,7 @@ class TestComputeMlRiskScores:
         past = date.today() - timedelta(days=5)
         # ACTIVE with a past end date: the nightly scheduler hasn't marked it
         # EXPIRED yet, so it is still scored.
-        contracts = [_make_contract(1, status="ACTIVE", end_date=past, org_id=1)]
+        contracts = [_make_contract(1, status="ACTIVE", end_date=past, org_id=uid(1))]
 
         mock_model = MagicMock()
         mock_model.predict_proba.return_value = np.array([[0.05, 0.10, 0.85]])
@@ -225,7 +226,7 @@ class TestComputeMlRiskScores:
         db.query.return_value.filter.return_value.group_by.return_value.all.return_value = [fv_row]
 
         with patch.object(ml_risk_scoring, "_load_model", return_value=mock_model):
-            result = ml_risk_scoring.compute_ml_risk_scores(db, org_id=1)
+            result = ml_risk_scoring.compute_ml_risk_scores(db, org_id=uid(1))
 
         assert result[1]["mlScore"] == pytest.approx(0.85, abs=1e-4)
         assert result[1]["mlLevel"] == "HIGH"
@@ -249,7 +250,7 @@ class TestComputeMlRiskScores:
         db.query.return_value.filter.return_value.group_by.return_value.all.return_value = []
 
         with patch.object(ml_risk_scoring, "_load_model", return_value=mock_model):
-            result = ml_risk_scoring.compute_ml_risk_scores(db, org_id=1)
+            result = ml_risk_scoring.compute_ml_risk_scores(db, org_id=uid(1))
 
         # Only ACTIVE/DRAFT rows reach the model, and each score lands on the
         # right contract id.
@@ -269,7 +270,7 @@ class TestComputeMlRiskScores:
         db.query.return_value.filter.return_value.group_by.return_value.all.return_value = []
 
         with patch.object(ml_risk_scoring, "_load_model", return_value=mock_model):
-            result = ml_risk_scoring.compute_ml_risk_scores(db, org_id=1)
+            result = ml_risk_scoring.compute_ml_risk_scores(db, org_id=uid(1))
 
         assert result == {}
         mock_model.predict_proba.assert_not_called()
@@ -289,6 +290,6 @@ class TestComputeMlRiskScores:
         with patch.object(ml_risk_scoring, "_load_model", return_value=mock_model):
             db = MagicMock()
             db.query.return_value.filter.return_value.filter.return_value.all.return_value = []
-            ml_risk_scoring.compute_ml_risk_scores(db, org_id=1, manager_id=42)
+            ml_risk_scoring.compute_ml_risk_scores(db, org_id=uid(1), manager_id=uid(42))
         db.query.return_value.filter.assert_called_once()
         db.query.return_value.filter.return_value.filter.assert_called_once()

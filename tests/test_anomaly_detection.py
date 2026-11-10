@@ -1,3 +1,4 @@
+from tests.ids import uid
 import pytest
 from unittest.mock import MagicMock
 
@@ -43,22 +44,22 @@ class TestSeverity:
 class TestComputeAnomalies:
     def test_returns_empty_when_below_min_records(self):
         rows = [_row(i, 1, 1, 2025, 1000.0) for i in range(4)]
-        assert compute_anomalies(_make_db(rows), org_id=1) == []
+        assert compute_anomalies(_make_db(rows), org_id=uid(1)) == []
 
     def test_returns_empty_when_no_records(self):
-        assert compute_anomalies(_make_db([]), org_id=1) == []
+        assert compute_anomalies(_make_db([]), org_id=uid(1)) == []
 
     def test_detects_extreme_outlier(self):
         rows = [_row(i, 1, (i % 12) + 1, 2025, 1_000.0, "A") for i in range(10)]
         rows.append(_row(99, 2, 6, 2025, 10_000_000.0, "Outlier"))
-        results = compute_anomalies(_make_db(rows), org_id=1)
+        results = compute_anomalies(_make_db(rows), org_id=uid(1))
         assert len(results) > 0
         assert "Outlier" in [r["customerName"] for r in results]
 
     def test_result_has_all_required_fields(self):
         rows = [_row(i, 1, (i % 12) + 1, 2025, 1_000.0 * (i + 1), "A") for i in range(10)]
         rows.append(_row(99, 2, 3, 2025, 9_999_999.0, "Big"))
-        results = compute_anomalies(_make_db(rows), org_id=1)
+        results = compute_anomalies(_make_db(rows), org_id=uid(1))
         if results:
             r = results[0]
             assert all(k in r for k in [
@@ -70,14 +71,14 @@ class TestComputeAnomalies:
         rows = [_row(i, 1, (i % 12) + 1, 2025, 1_000.0, "A") for i in range(10)]
         rows.append(_row(97, 2, 3, 2025, 8_000_000.0, "B"))
         rows.append(_row(98, 3, 4, 2025, 9_000_000.0, "C"))
-        results = compute_anomalies(_make_db(rows), org_id=1)
+        results = compute_anomalies(_make_db(rows), org_id=uid(1))
         scores = [r["anomalyScore"] for r in results]
         assert scores == sorted(scores)
 
     def test_anomaly_score_and_amount_are_float(self):
         rows = [_row(i, 1, (i % 12) + 1, 2025, 500.0 * (i + 1), "A") for i in range(10)]
         rows.append(_row(99, 2, 6, 2025, 5_000_000.0, "Anomaly"))
-        results = compute_anomalies(_make_db(rows), org_id=1)
+        results = compute_anomalies(_make_db(rows), org_id=uid(1))
         for r in results:
             assert isinstance(r["anomalyScore"], float)
             assert isinstance(r["financialAmount"], float)
@@ -85,49 +86,49 @@ class TestComputeAnomalies:
     def test_severity_in_valid_values(self):
         rows = [_row(i, 1, (i % 12) + 1, 2025, 500.0 * (i + 1), "A") for i in range(10)]
         rows.append(_row(99, 2, 6, 2025, 5_000_000.0, "Anomaly"))
-        results = compute_anomalies(_make_db(rows), org_id=1)
+        results = compute_anomalies(_make_db(rows), org_id=uid(1))
         for r in results:
             assert r["severity"] in ("LOW", "MEDIUM", "HIGH")
 
     def test_handles_none_financial_amount(self):
         rows = [_row(i, 1, 1, 2025, None if i == 5 else 1_000.0, "A") for i in range(10)]
         rows.append(_row(99, 2, 6, 2025, 5_000_000.0, "Big"))
-        results = compute_anomalies(_make_db(rows), org_id=1)
+        results = compute_anomalies(_make_db(rows), org_id=uid(1))
         assert isinstance(results, list)
 
     def test_db_execute_called_once(self):
         db = _make_db([])
-        compute_anomalies(db, org_id=1)
+        compute_anomalies(db, org_id=uid(1))
         db.execute.assert_called_once()
 
     def test_db_execute_called_with_org_id(self):
         db = _make_db([])
-        compute_anomalies(db, org_id=5)
+        compute_anomalies(db, org_id=uid(5))
         db.execute.assert_called_once()
 
     def test_db_execute_called_with_manager_id(self):
         db = _make_db([])
-        compute_anomalies(db, org_id=5, manager_id=42)
+        compute_anomalies(db, org_id=uid(5), manager_id=uid(42))
         db.execute.assert_called_once()
 
     def test_manager_id_narrows_the_organization(self):
         # A MANAGER call keeps the organization filter and adds its own: the
         # two conditions are ANDed, so the manager can only narrow the scope.
         db = _make_db([])
-        compute_anomalies(db, org_id=5, manager_id=42)
+        compute_anomalies(db, org_id=uid(5), manager_id=uid(42))
         compiled = str(db.execute.call_args[0][0].compile(
             compile_kwargs={"literal_binds": True}
         ))
-        assert "contracts.manager_id = 42" in compiled
-        assert "financial_values.organization_id = 5" in compiled
+        assert f"contracts.manager_id = '{uid(42)}'" in compiled
+        assert f"financial_values.organization_id = '{uid(5)}'" in compiled
 
     def test_organization_filter_always_applied(self):
         db = _make_db([])
-        compute_anomalies(db, org_id=5)
+        compute_anomalies(db, org_id=uid(5))
         compiled = str(db.execute.call_args[0][0].compile(
             compile_kwargs={"literal_binds": True}
         ))
-        assert "financial_values.organization_id = 5" in compiled
+        assert f"financial_values.organization_id = '{uid(5)}'" in compiled
         assert "manager_id" not in compiled
 
     def test_refuses_without_organization(self):

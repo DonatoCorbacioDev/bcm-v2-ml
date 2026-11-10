@@ -4,7 +4,7 @@
 """The one rule every data query in this service follows: it is scoped to an organization."""
 
 
-def require_org(org_id: int | None) -> int:
+def require_org(org_id: str | None) -> str:
     """Returns org_id, or refuses when there is none.
 
     A missing organization never means "every organization": the service fails

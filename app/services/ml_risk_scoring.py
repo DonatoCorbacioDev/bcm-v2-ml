@@ -75,7 +75,7 @@ def _build_feature_matrix(
     return np.array(rows, dtype=float) if rows else np.empty((0, 7))
 
 
-def compute_ml_risk_scores(db: Session, org_id: int | None, manager_id: int | None = None) -> dict:
+def compute_ml_risk_scores(db: Session, org_id: str | None, manager_id: str | None = None) -> dict:
     """
     Returns a dict keyed by contract_id:
         {contract_id: {"mlScore": float, "mlLevel": str}}

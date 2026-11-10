@@ -35,7 +35,7 @@ def _severity(score: float) -> str:
     return "LOW"
 
 
-def compute_anomalies(db: Session, org_id: int | None, manager_id: int | None = None) -> list[dict]:
+def compute_anomalies(db: Session, org_id: str | None, manager_id: str | None = None) -> list[dict]:
     """Return financial records flagged as anomalous by Isolation Forest.
 
     Uses financial_amount and cyclical month encoding as features.

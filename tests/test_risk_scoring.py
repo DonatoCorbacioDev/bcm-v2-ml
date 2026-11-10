@@ -1,3 +1,4 @@
+from tests.ids import uid
 import pytest
 from datetime import date, timedelta
 from unittest.mock import MagicMock
@@ -148,7 +149,7 @@ def make_manager_risk_session(contracts, fv_rows):
 def test_compute_risk_scores_empty():
     session = MagicMock()
     session.query.return_value.filter.return_value.all.return_value = []
-    assert compute_risk_scores(session, org_id=1) == []
+    assert compute_risk_scores(session, org_id=uid(1)) == []
 
 
 def test_compute_risk_scores_refuses_without_org_id():
@@ -168,7 +169,7 @@ def test_compute_risk_scores_sorted_descending():
         ContractMock(4, "No Date SA", None, 1),
     ]
     fv_rows = [FVRowMock(c.id, 10000.0) for c in contracts]
-    result = compute_risk_scores(make_risk_session(contracts, fv_rows), org_id=1)
+    result = compute_risk_scores(make_risk_session(contracts, fv_rows), org_id=uid(1))
     assert len(result) == 4
     for i in range(len(result) - 1):
         assert result[i]["riskScore"] >= result[i + 1]["riskScore"]
@@ -178,7 +179,7 @@ def test_compute_risk_scores_structure():
     today = date.today()
     contracts = [ContractMock(1, "Acme", today - timedelta(days=5), 1)]
     fv_rows = [FVRowMock(1, 50000.0)]
-    result = compute_risk_scores(make_risk_session(contracts, fv_rows), org_id=1)
+    result = compute_risk_scores(make_risk_session(contracts, fv_rows), org_id=uid(1))
     assert len(result) == 1
     item = result[0]
     assert item["contractId"] == 1
@@ -195,7 +196,7 @@ def test_compute_risk_scores_unusual_value():
     contracts.append(ContractMock(6, "Outlier", today + timedelta(days=365), 1))
     fv_rows = [FVRowMock(i, 1000.0) for i in range(1, 6)]
     fv_rows.append(FVRowMock(6, 100000.0))
-    result = compute_risk_scores(make_risk_session(contracts, fv_rows), org_id=1)
+    result = compute_risk_scores(make_risk_session(contracts, fv_rows), org_id=uid(1))
     outlier = next(r for r in result if r["contractId"] == 6)
     assert "UNUSUAL_VALUE" in outlier["anomalies"]
 
@@ -211,7 +212,7 @@ def test_compute_risk_scores_skips_cancelled_and_expired_contracts():
         ContractMock(4, "Expired", today - timedelta(days=10), 1, status="EXPIRED"),
     ]
     fv_rows = [FVRowMock(c.id, 10000.0) for c in contracts]
-    result = compute_risk_scores(make_risk_session(contracts, fv_rows), org_id=1)
+    result = compute_risk_scores(make_risk_session(contracts, fv_rows), org_id=uid(1))
     assert sorted(r["contractId"] for r in result) == [1, 2]
 
 
@@ -226,7 +227,7 @@ def test_compute_risk_scores_keeps_closed_contracts_in_value_baseline():
     contracts.append(ContractMock(6, "Outlier", far, 1))
     fv_rows = [FVRowMock(i, 1000.0) for i in range(1, 6)]
     fv_rows.append(FVRowMock(6, 100000.0))
-    result = compute_risk_scores(make_risk_session(contracts, fv_rows), org_id=1)
+    result = compute_risk_scores(make_risk_session(contracts, fv_rows), org_id=uid(1))
     assert sorted(r["contractId"] for r in result) == [5, 6]
     outlier = next(r for r in result if r["contractId"] == 6)
     assert "UNUSUAL_VALUE" in outlier["anomalies"]
@@ -236,7 +237,7 @@ def test_compute_risk_scores_only_closed_contracts_returns_empty():
     today = date.today()
     contracts = [ContractMock(1, "Cancelled", today - timedelta(days=10), 1, status="CANCELLED")]
     fv_rows = [FVRowMock(1, 10000.0)]
-    assert compute_risk_scores(make_risk_session(contracts, fv_rows), org_id=1) == []
+    assert compute_risk_scores(make_risk_session(contracts, fv_rows), org_id=uid(1)) == []
 
 
 def make_org_risk_session(contracts, fv_rows):
@@ -255,7 +256,7 @@ def test_compute_risk_scores_with_org_id_filters_query():
     fv_rows = [FVRowMock(1, 50000.0)]
     session = make_org_risk_session(contracts, fv_rows)
 
-    result = compute_risk_scores(session, org_id=7)
+    result = compute_risk_scores(session, org_id=uid(7))
 
     assert len(result) == 1
     assert result[0]["contractId"] == 1
@@ -267,7 +268,7 @@ def test_compute_risk_scores_with_manager_id_filters_contracts_and_totals():
     fv_rows = [FVRowMock(1, 50000.0)]
     session, _, _ = make_manager_risk_session(contracts, fv_rows)
 
-    result = compute_risk_scores(session, org_id=7, manager_id=42)
+    result = compute_risk_scores(session, org_id=uid(7), manager_id=uid(42))
 
     assert len(result) == 1
     assert result[0]["contractId"] == 1
@@ -282,7 +283,7 @@ def test_compute_risk_scores_manager_id_narrows_the_organization():
 
     session, contracts_q, fv_q = make_manager_risk_session(contracts, fv_rows)
 
-    compute_risk_scores(session, org_id=7, manager_id=42)
+    compute_risk_scores(session, org_id=uid(7), manager_id=uid(42))
 
     contracts_q.filter.assert_called_once()
     contracts_q.filter.return_value.filter.assert_called_once()

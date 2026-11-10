@@ -28,7 +28,7 @@ Open Data License 2.0 — not the raw ANAC dataset itself. See
 docker compose up -d mysql ml
 ollama pull llama3.2   # if not already pulled
 
-curl "http://localhost:8000/agent/insights?months=3&org_id=1"
+curl "http://localhost:8000/agent/insights?months=3&org_id=<organization UUID>"
 ```
 
 No `Authorization` header is needed here because `INTERNAL_API_KEY` is unset
@@ -41,7 +41,7 @@ directly.
 
 ## The contract: why it's HIGH risk, concretely
 
-Out of 41 contracts in the demo organization, `/risk-scores?org_id=1` ranked
+Out of 41 contracts in the demo organization, `/risk-scores?org_id=<organization UUID>` ranked
 **contract #78 — "Sbarbaro-Gibilisco e figli" (SYN-01-0008)** #2 overall:
 
 | Field | Value |

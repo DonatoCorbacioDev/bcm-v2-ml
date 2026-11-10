@@ -4,6 +4,7 @@
 import itertools
 import json
 import re
+from uuid import UUID
 
 import httpx
 from sqlalchemy.orm import Session
@@ -77,8 +78,8 @@ _TOOLS = [
                 "type": "object",
                 "properties": {
                     "contract_id": {
-                        "type": "integer",
-                        "description": "id of the contract this reminder is about.",
+                        "type": "string",
+                        "description": "id (a UUID) of the contract this reminder is about, exactly as another tool returned it.",
                     },
                     "message": {
                         "type": "string",
@@ -222,7 +223,7 @@ def _call_ollama(prompt: str) -> str:
 
 
 def generate_insights(
-    db: Session, months: int, org_id: int | None, manager_id: int | None = None
+    db: Session, months: int, org_id: str | None, manager_id: str | None = None
 ) -> dict:
     org_id = require_org(org_id)
     risk_scores = risk_scoring.compute_risk_scores(db, org_id, manager_id)
@@ -248,7 +249,7 @@ def generate_insights(
 
 
 def _run_tool(
-    name: str, arguments: dict, db: Session, org_id: int | None, manager_id: int | None = None
+    name: str, arguments: dict, db: Session, org_id: str | None, manager_id: str | None = None
 ) -> object:
     # org_id/manager_id always come from ask_agent's own parameters, never from
     # `arguments` (the model's tool-call input) — that boundary is what keeps a
@@ -266,13 +267,19 @@ def _run_tool(
 
 
 def _propose_reminder(
-    arguments: dict, db: Session, org_id: int | None, manager_id: int | None = None
+    arguments: dict, db: Session, org_id: str | None, manager_id: str | None = None
 ) -> dict:
     org_id = require_org(org_id)
     contract_id = arguments.get("contract_id")
     message = str(arguments.get("message") or "").strip()
     if not contract_id or not message:
         return {"error": "contract_id and message are required"}
+    # Ids are UUIDs: anything else the model produced (a number, a name, a
+    # half-remembered id) cannot be a contract, so no query is made for it.
+    try:
+        contract_id = str(UUID(str(contract_id)))
+    except ValueError:
+        return {"error": f"Contract {contract_id} not found"}
 
     # Scoped by org_id (and manager_id) exactly like every read tool above — a
     # contract_id the model saw (or guessed) for a different manager/org must
@@ -401,7 +408,7 @@ def _finalize_answer(content: str | None, placeholders: dict, proposed_action: d
 
 
 def ask_agent(
-    db: Session, question: str, org_id: int | None, manager_id: int | None = None
+    db: Session, question: str, org_id: str | None, manager_id: str | None = None
 ) -> dict:
     """Answers a free-text question by letting the model call read-only tools
     (risk scores, forecast) grounded in the caller's own data, instead of

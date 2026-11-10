@@ -79,7 +79,7 @@ def _prophet_forecast(df: pd.DataFrame, h: int) -> list[dict]:
 
 
 def compute_forecast(
-    db: Session, months: int, org_id: int | None, manager_id: int | None = None
+    db: Session, months: int, org_id: str | None, manager_id: str | None = None
 ) -> dict:
     """Return historical monthly totals and a Prophet forecast for N months ahead.
 

@@ -44,7 +44,7 @@ def _level(score: float) -> str:
     return "LOW"
 
 
-def compute_risk_scores(db: Session, org_id: int | None, manager_id: int | None = None) -> list:
+def compute_risk_scores(db: Session, org_id: str | None, manager_id: str | None = None) -> list:
     org_id = require_org(org_id)
     contracts_query = db.query(Contract).filter(Contract.organization_id == org_id)
     if manager_id is not None:

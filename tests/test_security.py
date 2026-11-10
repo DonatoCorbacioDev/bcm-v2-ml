@@ -1,3 +1,4 @@
+from tests.ids import uid
 import base64
 import time
 
@@ -55,10 +56,10 @@ def _sign(private_key, org_id=None, manager_id=None, exp_delta=30):
 def test_claims_fall_back_to_query_params_when_no_key_configured(monkeypatch):
     monkeypatch.setattr(settings, "INTERNAL_CLAIMS_PUBLIC_KEY", "")
 
-    claims = verify_internal_claims(org_id=7, manager_id=42, x_internal_claims=None)
+    claims = verify_internal_claims(org_id=uid(7), manager_id=uid(42), x_internal_claims=None)
 
-    assert claims.org_id == 7
-    assert claims.manager_id == 42
+    assert claims.org_id == uid(7)
+    assert claims.manager_id == uid(42)
 
 
 def test_claims_rejects_missing_header_when_key_configured(monkeypatch, keypair):
@@ -66,7 +67,7 @@ def test_claims_rejects_missing_header_when_key_configured(monkeypatch, keypair)
     monkeypatch.setattr(settings, "INTERNAL_CLAIMS_PUBLIC_KEY", public_key_b64)
 
     with pytest.raises(HTTPException) as exc:
-        verify_internal_claims(org_id=7, manager_id=None, x_internal_claims=None)
+        verify_internal_claims(org_id=uid(7), manager_id=None, x_internal_claims=None)
     assert exc.value.status_code == 401
 
 
@@ -82,7 +83,7 @@ def test_claims_rejects_malformed_token(monkeypatch, keypair):
 def test_claims_rejects_expired_token(monkeypatch, keypair):
     private_key, public_key_b64 = keypair
     monkeypatch.setattr(settings, "INTERNAL_CLAIMS_PUBLIC_KEY", public_key_b64)
-    token = _sign(private_key, org_id=7, exp_delta=-10)
+    token = _sign(private_key, org_id=uid(7), exp_delta=-10)
 
     with pytest.raises(HTTPException) as exc:
         verify_internal_claims(org_id=None, manager_id=None, x_internal_claims=token)
@@ -93,7 +94,7 @@ def test_claims_rejects_token_signed_by_a_different_key(monkeypatch, keypair):
     _, public_key_b64 = keypair
     monkeypatch.setattr(settings, "INTERNAL_CLAIMS_PUBLIC_KEY", public_key_b64)
     other_private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    forged_token = _sign(other_private_key, org_id=7)
+    forged_token = _sign(other_private_key, org_id=uid(7))
 
     with pytest.raises(HTTPException) as exc:
         verify_internal_claims(org_id=None, manager_id=None, x_internal_claims=forged_token)
@@ -103,12 +104,12 @@ def test_claims_rejects_token_signed_by_a_different_key(monkeypatch, keypair):
 def test_claims_returns_verified_org_and_manager_id(monkeypatch, keypair):
     private_key, public_key_b64 = keypair
     monkeypatch.setattr(settings, "INTERNAL_CLAIMS_PUBLIC_KEY", public_key_b64)
-    token = _sign(private_key, org_id=7, manager_id=42)
+    token = _sign(private_key, org_id=uid(7), manager_id=uid(42))
 
     claims = verify_internal_claims(org_id=None, manager_id=None, x_internal_claims=token)
 
-    assert claims.org_id == 7
-    assert claims.manager_id == 42
+    assert claims.org_id == uid(7)
+    assert claims.manager_id == uid(42)
 
 
 def test_claims_ignore_query_params_when_key_configured(monkeypatch, keypair):
@@ -117,11 +118,11 @@ def test_claims_ignore_query_params_when_key_configured(monkeypatch, keypair):
     never override — or even supplement — the verified token's claims."""
     private_key, public_key_b64 = keypair
     monkeypatch.setattr(settings, "INTERNAL_CLAIMS_PUBLIC_KEY", public_key_b64)
-    token = _sign(private_key, org_id=7, manager_id=None)
+    token = _sign(private_key, org_id=uid(7), manager_id=None)
 
-    claims = verify_internal_claims(org_id=999, manager_id=999, x_internal_claims=token)
+    claims = verify_internal_claims(org_id=uid(999), manager_id=uid(999), x_internal_claims=token)
 
-    assert claims.org_id == 7
+    assert claims.org_id == uid(7)
     assert claims.manager_id is None
 
 
@@ -130,10 +131,10 @@ def test_claims_reject_a_valid_token_without_organization(monkeypatch, keypair):
     # turned into "every organization".
     private_key, public_b64 = keypair
     monkeypatch.setattr(settings, "INTERNAL_CLAIMS_PUBLIC_KEY", public_b64)
-    token = _sign(private_key, org_id=None, manager_id=42)
+    token = _sign(private_key, org_id=None, manager_id=uid(42))
 
     with pytest.raises(HTTPException) as exc:
-        verify_internal_claims(org_id=7, manager_id=None, x_internal_claims=token)
+        verify_internal_claims(org_id=uid(7), manager_id=None, x_internal_claims=token)
 
     assert exc.value.status_code == 401
     assert exc.value.detail == "Missing organization in internal claims"
@@ -143,6 +144,31 @@ def test_claims_reject_missing_org_query_param_when_no_key_configured(monkeypatc
     monkeypatch.setattr(settings, "INTERNAL_CLAIMS_PUBLIC_KEY", "")
 
     with pytest.raises(HTTPException) as exc:
-        verify_internal_claims(org_id=None, manager_id=42, x_internal_claims=None)
+        verify_internal_claims(org_id=None, manager_id=uid(42), x_internal_claims=None)
 
     assert exc.value.status_code == 401
+
+
+@pytest.mark.parametrize("org_id", [7, "7", "not-a-uuid"])
+def test_claims_reject_an_organization_that_is_not_a_uuid(monkeypatch, keypair, org_id):
+    # Correctly signed, but a numeric id (tokens from before ids became UUIDs)
+    # or any other non-UUID value: refused, never matched against the data.
+    private_key, public_b64 = keypair
+    monkeypatch.setattr(settings, "INTERNAL_CLAIMS_PUBLIC_KEY", public_b64)
+    token = _sign(private_key, org_id=org_id)
+
+    with pytest.raises(HTTPException) as exc:
+        verify_internal_claims(org_id=None, manager_id=None, x_internal_claims=token)
+
+    assert exc.value.status_code == 401
+    assert exc.value.detail == "Invalid internal claims"
+
+
+def test_claims_normalize_uuid_text_to_lowercase(monkeypatch, keypair):
+    private_key, public_b64 = keypair
+    monkeypatch.setattr(settings, "INTERNAL_CLAIMS_PUBLIC_KEY", public_b64)
+    token = _sign(private_key, org_id=uid(171).upper(), manager_id=uid(42).upper())
+
+    claims = verify_internal_claims(org_id=None, manager_id=None, x_internal_claims=token)
+
+    assert (claims.org_id, claims.manager_id) == (uid(171), uid(42))

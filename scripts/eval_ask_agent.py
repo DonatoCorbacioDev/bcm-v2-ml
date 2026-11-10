@@ -188,6 +188,10 @@ def anomaly_misattributions(answer: str, risk_scores: list) -> list[str]:
     return issues
 
 
+# The database is mocked: any organization id works, it only has to be a UUID like real ones.
+EVAL_ORG_ID = "00000000-0000-0000-0000-000000000001"
+
+
 def run_scenario(scenario: dict, model: str) -> dict:
     """Always returns a result dict, never None: an ask_agent error (e.g.
     the leaked-tool-call guard added 2026-10-19, see agent.py's
@@ -197,7 +201,7 @@ def run_scenario(scenario: dict, model: str) -> dict:
     db = MagicMock()
     with patch("app.services.agent.risk_scoring.compute_risk_scores", return_value=scenario["risk_scores"]), \
          patch("app.services.agent.forecasting.compute_forecast", return_value={"historical": [], "forecast": []}):
-        result = agent_service.ask_agent(db, scenario["question"], org_id=1)
+        result = agent_service.ask_agent(db, scenario["question"], org_id=EVAL_ORG_ID)
 
     answer = result["answer"] or ""
     return {

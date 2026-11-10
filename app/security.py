@@ -3,6 +3,7 @@
 
 import base64
 from typing import Annotated
+from uuid import UUID
 
 import jwt
 from cryptography.hazmat.primitives import serialization
@@ -23,15 +24,19 @@ def verify_internal_api_key(
 
 
 class InternalClaims(BaseModel):
-    """The caller's verified org_id/manager_id scope for one request."""
+    """The caller's verified org_id/manager_id scope for one request.
 
-    org_id: int | None = None
-    manager_id: int | None = None
+    Both are UUIDs in canonical lowercase text (ADR-0009 in the backend), the
+    form the CHAR(36) columns hold.
+    """
+
+    org_id: str | None = None
+    manager_id: str | None = None
 
 
 def verify_internal_claims(
-    org_id: Annotated[int | None, Query()] = None,
-    manager_id: Annotated[int | None, Query()] = None,
+    org_id: Annotated[UUID | None, Query()] = None,
+    manager_id: Annotated[UUID | None, Query()] = None,
     x_internal_claims: Annotated[str | None, Header()] = None,
 ) -> InternalClaims:
     """Resolves the request's org_id/manager_id scope.
@@ -49,7 +54,7 @@ def verify_internal_claims(
     organization never means "every organization".
     """
     if not settings.INTERNAL_CLAIMS_PUBLIC_KEY:
-        return _require_org_scope(InternalClaims(org_id=org_id, manager_id=manager_id))
+        return _require_org_scope(InternalClaims(org_id=_text(org_id), manager_id=_text(manager_id)))
 
     if not x_internal_claims:
         raise HTTPException(
@@ -67,7 +72,29 @@ def verify_internal_claims(
             detail="Invalid internal claims",
         ) from exc
 
-    return _require_org_scope(InternalClaims(org_id=payload.get("orgId"), manager_id=payload.get("managerId")))
+    try:
+        claims = InternalClaims(org_id=_uuid_claim(payload.get("orgId")),
+                                manager_id=_uuid_claim(payload.get("managerId")))
+    except ValueError as exc:
+        # Signed, but not a UUID (e.g. a numeric id from before ADR-0009): refused.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid internal claims",
+        ) from exc
+    return _require_org_scope(claims)
+
+
+def _text(value: UUID | None) -> str | None:
+    return str(value) if value is not None else None
+
+
+def _uuid_claim(value: object) -> str | None:
+    """A claim value as canonical UUID text; anything else that is present is invalid."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("claim is not a string")
+    return str(UUID(value))
 
 
 def _require_org_scope(claims: InternalClaims) -> InternalClaims:

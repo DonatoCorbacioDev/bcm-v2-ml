@@ -1,3 +1,4 @@
+from tests.ids import uid
 import asyncio
 import logging
 from unittest.mock import patch
@@ -42,14 +43,14 @@ def test_health():
 
 
 def test_forecast_default():
-    response = client.get("/forecast?org_id=1")
+    response = client.get(f"/forecast?org_id={uid(1)}")
     assert response.status_code == 200
     data = response.json()
     assert data == {"historical": [], "forecast": []}
 
 
 def test_forecast_custom_months():
-    response = client.get("/forecast?months=6&org_id=1")
+    response = client.get(f"/forecast?months=6&org_id={uid(1)}")
     assert response.status_code == 200
     data = response.json()
     assert "historical" in data
@@ -57,24 +58,24 @@ def test_forecast_custom_months():
 
 
 def test_forecast_months_too_low():
-    response = client.get("/forecast?months=0&org_id=1")
+    response = client.get(f"/forecast?months=0&org_id={uid(1)}")
     assert response.status_code == 422
 
 
 def test_forecast_months_too_high():
-    response = client.get("/forecast?months=25&org_id=1")
+    response = client.get(f"/forecast?months=25&org_id={uid(1)}")
     assert response.status_code == 422
 
 
 def test_risk_scores_empty():
-    response = client.get("/risk-scores?org_id=1")
+    response = client.get(f"/risk-scores?org_id={uid(1)}")
     assert response.status_code == 200
     assert response.json() == []
 
 
 def test_agent_insights_success():
     with patch("app.services.agent._call_ollama", return_value="Generated report"):
-        response = client.get("/agent/insights?org_id=1")
+        response = client.get(f"/agent/insights?org_id={uid(1)}")
     assert response.status_code == 200
     data = response.json()
     assert data == {
@@ -87,7 +88,7 @@ def test_agent_insights_success():
 
 def test_agent_insights_ollama_unavailable():
     with patch("app.services.agent._call_ollama", side_effect=httpx.ConnectError("refused")):
-        response = client.get("/agent/insights?org_id=1")
+        response = client.get(f"/agent/insights?org_id={uid(1)}")
     assert response.status_code == 200
     data = response.json()
     assert data["report"] is None
@@ -95,46 +96,46 @@ def test_agent_insights_ollama_unavailable():
 
 
 def test_agent_insights_months_too_low():
-    response = client.get("/agent/insights?months=0&org_id=1")
+    response = client.get(f"/agent/insights?months=0&org_id={uid(1)}")
     assert response.status_code == 422
 
 
 def test_agent_insights_months_too_high():
-    response = client.get("/agent/insights?months=25&org_id=1")
+    response = client.get(f"/agent/insights?months=25&org_id={uid(1)}")
     assert response.status_code == 422
 
 
 def test_risk_scores_accepts_org_id():
-    response = client.get("/risk-scores?org_id=1")
+    response = client.get(f"/risk-scores?org_id={uid(1)}")
     assert response.status_code == 200
     assert response.json() == []
 
 
 def test_forecast_accepts_org_id():
-    response = client.get("/forecast?org_id=1")
+    response = client.get(f"/forecast?org_id={uid(1)}")
     assert response.status_code == 200
 
 
 def test_forecast_accepts_manager_id():
-    response = client.get("/forecast?org_id=1&manager_id=42")
+    response = client.get(f"/forecast?org_id={uid(1)}&manager_id={uid(42)}")
     assert response.status_code == 200
 
 
 def test_risk_scores_accepts_manager_id():
-    response = client.get("/risk-scores?org_id=1&manager_id=42")
+    response = client.get(f"/risk-scores?org_id={uid(1)}&manager_id={uid(42)}")
     assert response.status_code == 200
     assert response.json() == []
 
 
 def test_protected_endpoint_rejects_request_without_key_when_configured(monkeypatch):
     monkeypatch.setattr(settings, "INTERNAL_API_KEY", "secret")
-    response = client.get("/risk-scores?org_id=1")
+    response = client.get(f"/risk-scores?org_id={uid(1)}")
     assert response.status_code == 401
 
 
 def test_protected_endpoint_accepts_request_with_correct_key(monkeypatch):
     monkeypatch.setattr(settings, "INTERNAL_API_KEY", "secret")
-    response = client.get("/risk-scores?org_id=1", headers={"X-Internal-Api-Key": "secret"})
+    response = client.get(f"/risk-scores?org_id={uid(1)}", headers={"X-Internal-Api-Key": "secret"})
     assert response.status_code == 200
 
 
@@ -146,6 +147,11 @@ def test_scoped_endpoint_rejects_request_without_organization():
         assert response.json()["detail"] == "Missing organization in internal claims"
     response = client.post("/agent/ask", json={"question": "ok"})
     assert response.status_code == 401
+
+
+def test_scoped_endpoint_rejects_an_organization_that_is_not_a_uuid():
+    response = client.get("/risk-scores?org_id=1")
+    assert response.status_code == 422
 
 
 def test_health_does_not_require_key(monkeypatch):
@@ -186,7 +192,7 @@ def test_lifespan_no_warning_when_internal_api_key_set(monkeypatch, caplog):
 
 def test_anomalies_empty():
     with patch("app.services.anomaly_detection.compute_anomalies", return_value=[]):
-        response = client.get("/anomalies?org_id=1")
+        response = client.get(f"/anomalies?org_id={uid(1)}")
     assert response.status_code == 200
     assert response.json() == []
 
@@ -198,7 +204,7 @@ def test_anomalies_returns_flagged_records():
         "anomalyScore": -0.5, "severity": "HIGH",
     }]
     with patch("app.services.anomaly_detection.compute_anomalies", return_value=fake):
-        response = client.get("/anomalies?org_id=1")
+        response = client.get(f"/anomalies?org_id={uid(1)}")
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 1
@@ -207,15 +213,15 @@ def test_anomalies_returns_flagged_records():
 
 def test_anomalies_accepts_org_id():
     with patch("app.services.anomaly_detection.compute_anomalies", return_value=[]):
-        response = client.get("/anomalies?org_id=3")
+        response = client.get(f"/anomalies?org_id={uid(3)}")
     assert response.status_code == 200
 
 
 def test_anomalies_accepts_manager_id():
     with patch("app.services.anomaly_detection.compute_anomalies", return_value=[]) as mock_compute:
-        response = client.get("/anomalies?org_id=3&manager_id=42")
+        response = client.get(f"/anomalies?org_id={uid(3)}&manager_id={uid(42)}")
     assert response.status_code == 200
-    assert mock_compute.call_args.args[1:] == (3, 42)
+    assert mock_compute.call_args.args[1:] == (uid(3), uid(42))
 
 
 def test_lifespan_no_warning_in_development(monkeypatch, caplog):
@@ -231,7 +237,7 @@ def test_risk_scores_merges_ml_scores_when_present():
     fake_ml = {1: {"mlScore": 0.9, "mlLevel": "HIGH"}}
     with patch("app.routers.risk_scores.risk_scoring.compute_risk_scores", return_value=fake_results), \
          patch("app.routers.risk_scores.ml_risk_scoring.compute_ml_risk_scores", return_value=fake_ml):
-        response = client.get("/risk-scores?org_id=1")
+        response = client.get(f"/risk-scores?org_id={uid(1)}")
     assert response.status_code == 200
     data = response.json()
     assert data[0]["mlScore"] == 0.9
@@ -254,19 +260,19 @@ def test_clause_risk_analysis_requires_text_field():
 def test_agent_ask_success():
     with patch("app.services.agent._call_ollama_chat",
                return_value={"role": "assistant", "content": "Answer text"}):
-        response = client.post("/agent/ask?org_id=1", json={"question": "Any contracts expiring soon?"})
+        response = client.post(f"/agent/ask?org_id={uid(1)}", json={"question": "Any contracts expiring soon?"})
     assert response.status_code == 200
     assert response.json() == {"answer": "Answer text", "error": None, "proposedAction": None}
 
 
 def test_agent_ask_requires_question_field():
-    response = client.post("/agent/ask?org_id=1", json={})
+    response = client.post(f"/agent/ask?org_id={uid(1)}", json={})
     assert response.status_code == 422
 
 
 def test_agent_ask_ollama_unavailable():
     with patch("app.services.agent._call_ollama_chat", side_effect=httpx.ConnectError("refused")):
-        response = client.post("/agent/ask?org_id=1", json={"question": "Any question"})
+        response = client.post(f"/agent/ask?org_id={uid(1)}", json={"question": "Any question"})
     assert response.status_code == 200
     data = response.json()
     assert data["answer"] is None
@@ -277,7 +283,7 @@ def test_agent_ask_accepts_org_id():
     with patch("app.services.agent._call_ollama_chat",
                return_value={"role": "assistant", "content": "ok"}) as mock_chat, \
          patch("app.services.agent.risk_scoring.compute_risk_scores", return_value=[]):
-        response = client.post("/agent/ask?org_id=3", json={"question": "ok"})
+        response = client.post(f"/agent/ask?org_id={uid(3)}", json={"question": "ok"})
     assert response.status_code == 200
     mock_chat.assert_called_once()
 
@@ -290,9 +296,9 @@ def test_agent_ask_accepts_manager_id():
     final_answer = {"role": "assistant", "content": "ok"}
     with patch("app.services.agent._call_ollama_chat", side_effect=[tool_request, final_answer]), \
          patch("app.services.agent.risk_scoring.compute_risk_scores", return_value=[]) as mock_risk:
-        response = client.post("/agent/ask?org_id=3&manager_id=42", json={"question": "ok"})
+        response = client.post(f"/agent/ask?org_id={uid(3)}&manager_id={uid(42)}", json={"question": "ok"})
     assert response.status_code == 200
-    assert mock_risk.call_args.args[1:] == (3, 42)
+    assert mock_risk.call_args.args[1:] == (uid(3), uid(42))
 
 
 def test_risk_scores_skips_ml_merge_when_no_matching_contract():
@@ -300,7 +306,7 @@ def test_risk_scores_skips_ml_merge_when_no_matching_contract():
     fake_ml = {1: {"mlScore": 0.9, "mlLevel": "HIGH"}}
     with patch("app.routers.risk_scores.risk_scoring.compute_risk_scores", return_value=fake_results), \
          patch("app.routers.risk_scores.ml_risk_scoring.compute_ml_risk_scores", return_value=fake_ml):
-        response = client.get("/risk-scores?org_id=1")
+        response = client.get(f"/risk-scores?org_id={uid(1)}")
     assert response.status_code == 200
     data = response.json()
     assert "mlScore" not in data[0]

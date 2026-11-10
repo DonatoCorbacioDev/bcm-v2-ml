@@ -35,18 +35,18 @@ budgets for --org-id, not just SYN-* rows, so it also undoes whatever a demo
 visitor created or deleted through the app itself):
     docker exec bcm-ml python scripts/seed_synthetic_data.py --db-url \
         mysql+pymysql://<user>:<password>@mysql:3306/bcm \
-        --org-id 7 --manager-id 12 --wipe-org --yes
+        --org-id <organization UUID> --manager-id <manager UUID> --wipe-org --yes
 """
 import argparse
 import os
 import random
 import re
+import uuid
 import sys
 from datetime import date, timedelta
 
 import numpy as np
 from sqlalchemy import (
-    BigInteger,
     Column,
     Date,
     Float,
@@ -68,6 +68,11 @@ except ImportError:
     _fake = None
 
 SYN_PREFIX = "SYN-"
+
+
+def org_tag(org_id) -> str:
+    """Short, stable tag of an organization for contract numbers: its UUID's first 8 hex digits."""
+    return str(org_id)[:8]
 
 STATUS_WEIGHTS = [("ACTIVE", 0.60), ("EXPIRED", 0.22), ("CANCELLED", 0.08), ("DRAFT", 0.10)]
 
@@ -125,51 +130,51 @@ metadata = MetaData()
 counterparties_table = Table(
     "counterparties",
     metadata,
-    Column("id", BigInteger, primary_key=True),
+    Column("id", String(36), primary_key=True),
     Column("name", String(255)),
     Column("type", String(10)),
-    Column("organization_id", BigInteger),
+    Column("organization_id", String(36)),
 )
 
 contracts_table = Table(
     "contracts",
     metadata,
-    Column("id", BigInteger, primary_key=True),
-    Column("counterparty_id", BigInteger),
+    Column("id", String(36), primary_key=True),
+    Column("counterparty_id", String(36)),
     Column("contract_number", String(255)),
     Column("wbs_code", String(50)),
     Column("project_name", String(100)),
-    Column("area_id", BigInteger),
-    Column("manager_id", BigInteger),
+    Column("area_id", String(36)),
+    Column("manager_id", String(36)),
     Column("start_date", Date),
     Column("end_date", Date),
     Column("status", String(20)),
     Column("workflow_stage", String(20)),
-    Column("organization_id", BigInteger),
+    Column("organization_id", String(36)),
 )
 
 financial_values_table = Table(
     "financial_values",
     metadata,
-    Column("id", BigInteger, primary_key=True),
+    Column("id", String(36), primary_key=True),
     Column("month_value", Integer),
     Column("year_value", Integer),
     Column("financial_amount", Float),
-    Column("financial_type_id", BigInteger),
-    Column("area_id", BigInteger),
-    Column("contract_id", BigInteger),
-    Column("organization_id", BigInteger),
+    Column("financial_type_id", String(36)),
+    Column("area_id", String(36)),
+    Column("contract_id", String(36)),
+    Column("organization_id", String(36)),
 )
 
 budgets_table = Table(
     "budgets",
     metadata,
-    Column("id", BigInteger, primary_key=True),
-    Column("business_area_id", BigInteger),
+    Column("id", String(36), primary_key=True),
+    Column("business_area_id", String(36)),
     Column("category", String(10)),
     Column("year_value", Integer),
     Column("target_amount", Float),
-    Column("organization_id", BigInteger),
+    Column("organization_id", String(36)),
 )
 
 
@@ -188,11 +193,11 @@ def parse_args():
     parser.add_argument("--yes", action="store_true", help="Skip interactive confirmation prompts")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
-        "--org-id", type=int, default=None,
+        "--org-id", type=lambda v: str(uuid.UUID(v)), default=None,
         help="Only seed this organization id (default: all organizations with usable reference data)",
     )
     parser.add_argument(
-        "--manager-id", type=int, default=None,
+        "--manager-id", type=lambda v: str(uuid.UUID(v)), default=None,
         help="Assign every seeded contract to this manager id (requires --org-id). "
              "Without it, contracts are created unassigned (manager_id NULL) as before.",
     )
@@ -285,8 +290,8 @@ def build_financial_rows(rng, np_rng, start_date, end_date, today, min_months, m
         sales = max(500.0, base_amount * trend * seasonal * float(np_rng.normal(1.0, 0.06)))
         cost_ratio = rng.uniform(0.4, 0.7)
         costs = max(200.0, sales * cost_ratio * float(np_rng.normal(1.0, 0.05)))
-        rows.append({"month_value": cm, "year_value": cy, "financial_amount": round(sales, 2), "financial_type_id": type_ids["Ricavi"]})
-        rows.append({"month_value": cm, "year_value": cy, "financial_amount": round(costs, 2), "financial_type_id": type_ids["Costi"]})
+        rows.append({"id": str(uuid.uuid4()), "month_value": cm, "year_value": cy, "financial_amount": round(sales, 2), "financial_type_id": type_ids["Ricavi"]})
+        rows.append({"id": str(uuid.uuid4()), "month_value": cm, "year_value": cy, "financial_amount": round(costs, 2), "financial_type_id": type_ids["Costi"]})
     return rows
 
 
@@ -319,10 +324,10 @@ def fetch_reference_data(conn):
 
 
 def next_syn_sequence(conn, org_id):
-    pattern = re.compile(rf"^{re.escape(SYN_PREFIX)}{org_id:02d}-(\d+)$")
+    pattern = re.compile(rf"^{re.escape(SYN_PREFIX)}{org_tag(org_id)}-(\d+)$")
     rows = conn.execute(
         text("SELECT contract_number FROM contracts WHERE organization_id = :oid AND contract_number LIKE :prefix"),
-        {"oid": org_id, "prefix": f"{SYN_PREFIX}{org_id:02d}-%"},
+        {"oid": org_id, "prefix": f"{SYN_PREFIX}{org_tag(org_id)}-%"},
     ).all()
     max_seq = 0
     for (contract_number,) in rows:
@@ -339,7 +344,7 @@ def reset_org_synthetic_data(conn, org_id):
             "JOIN contracts c ON fv.contract_id = c.id "
             "WHERE c.organization_id = :oid AND c.contract_number LIKE :prefix"
         ),
-        {"oid": org_id, "prefix": f"{SYN_PREFIX}{org_id:02d}-%"},
+        {"oid": org_id, "prefix": f"{SYN_PREFIX}{org_tag(org_id)}-%"},
     )
     # Snapshot which counterparties this reset's contracts point to before
     # deleting the contracts -- deleting them first would lose that link.
@@ -349,12 +354,12 @@ def reset_org_synthetic_data(conn, org_id):
                 "SELECT counterparty_id FROM contracts "
                 "WHERE organization_id = :oid AND contract_number LIKE :prefix"
             ),
-            {"oid": org_id, "prefix": f"{SYN_PREFIX}{org_id:02d}-%"},
+            {"oid": org_id, "prefix": f"{SYN_PREFIX}{org_tag(org_id)}-%"},
         ).all()
     ]
     result = conn.execute(
         text("DELETE FROM contracts WHERE organization_id = :oid AND contract_number LIKE :prefix"),
-        {"oid": org_id, "prefix": f"{SYN_PREFIX}{org_id:02d}-%"},
+        {"oid": org_id, "prefix": f"{SYN_PREFIX}{org_tag(org_id)}-%"},
     )
     _delete_orphaned_counterparties(conn, org_id, counterparty_ids)
     return result.rowcount
@@ -442,6 +447,7 @@ def seed_budgets(conn, org, areas, type_ids, contracts_fv_by_area_category, year
             realized = contracts_fv_by_area_category.get((area["id"], type_name), 0.0)
             target = max(realized * 1.15, 10_000.0)
             rows.append({
+                "id": str(uuid.uuid4()),
                 "business_area_id": area["id"],
                 "category": category,
                 "year_value": year,
@@ -478,6 +484,7 @@ def seed_organization(conn, rng, np_rng, org, areas, type_ids, args, today, star
 
         counterparty_result = conn.execute(
             insert(counterparties_table).values(
+                id=str(uuid.uuid4()),
                 name=random_company_name(rng),
                 type="CUSTOMER",
                 organization_id=org["id"],
@@ -486,8 +493,9 @@ def seed_organization(conn, rng, np_rng, org, areas, type_ids, args, today, star
         counterparty_id = counterparty_result.inserted_primary_key[0]
 
         contract_values = {
+            "id": str(uuid.uuid4()),
             "counterparty_id": counterparty_id,
-            "contract_number": f"{SYN_PREFIX}{org['id']:02d}-{seq:04d}",
+            "contract_number": f"{SYN_PREFIX}{org_tag(org['id'])}-{seq:04d}",
             "wbs_code": f"WBS-{rng.randint(1000, 9999)}" if rng.random() < 0.7 else None,
             "project_name": random_project_name(rng, area["name"]),
             "area_id": area["id"],
