@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 import httpx
+import pytest
 
 from app.services.clause_risk import (
     MAX_TEXT_CHARS, _build_prompt, _call_ollama, _is_grounded, analyze_clauses,
@@ -34,11 +35,8 @@ def test_call_ollama_http_status_error():
         "error", request=MagicMock(), response=mock_response
     )
     with patch("app.services.clause_risk.httpx.post", return_value=mock_response):
-        try:
+        with pytest.raises(httpx.HTTPStatusError):
             _call_ollama("some prompt")
-            assert False, "expected httpx.HTTPStatusError"
-        except httpx.HTTPStatusError:
-            pass
 
 
 # ── analyze_clauses ──────────────────────────────────────────────────────────

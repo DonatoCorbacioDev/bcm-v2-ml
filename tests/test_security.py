@@ -66,8 +66,9 @@ def test_claims_rejects_missing_header_when_key_configured(monkeypatch, keypair)
     _, public_key_b64 = keypair
     monkeypatch.setattr(settings, "INTERNAL_CLAIMS_PUBLIC_KEY", public_key_b64)
 
+    org_id = uid(7)
     with pytest.raises(HTTPException) as exc:
-        verify_internal_claims(org_id=uid(7), manager_id=None, x_internal_claims=None)
+        verify_internal_claims(org_id=org_id, manager_id=None, x_internal_claims=None)
     assert exc.value.status_code == 401
 
 
@@ -133,8 +134,9 @@ def test_claims_reject_a_valid_token_without_organization(monkeypatch, keypair):
     monkeypatch.setattr(settings, "INTERNAL_CLAIMS_PUBLIC_KEY", public_b64)
     token = _sign(private_key, org_id=None, manager_id=uid(42))
 
+    org_id = uid(7)
     with pytest.raises(HTTPException) as exc:
-        verify_internal_claims(org_id=uid(7), manager_id=None, x_internal_claims=token)
+        verify_internal_claims(org_id=org_id, manager_id=None, x_internal_claims=token)
 
     assert exc.value.status_code == 401
     assert exc.value.detail == "Missing organization in internal claims"
@@ -143,8 +145,9 @@ def test_claims_reject_a_valid_token_without_organization(monkeypatch, keypair):
 def test_claims_reject_missing_org_query_param_when_no_key_configured(monkeypatch):
     monkeypatch.setattr(settings, "INTERNAL_CLAIMS_PUBLIC_KEY", "")
 
+    manager_id = uid(42)
     with pytest.raises(HTTPException) as exc:
-        verify_internal_claims(org_id=None, manager_id=uid(42), x_internal_claims=None)
+        verify_internal_claims(org_id=None, manager_id=manager_id, x_internal_claims=None)
 
     assert exc.value.status_code == 401
 

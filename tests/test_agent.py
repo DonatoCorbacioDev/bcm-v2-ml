@@ -167,11 +167,8 @@ def test_call_ollama_success():
 
 def test_call_ollama_connection_error():
     with patch("app.services.agent.httpx.post", side_effect=httpx.ConnectError("refused")):
-        try:
+        with pytest.raises(httpx.ConnectError):
             _call_ollama("some prompt")
-            assert False, "expected httpx.ConnectError"
-        except httpx.ConnectError:
-            pass
 
 
 def test_call_ollama_http_status_error():
@@ -180,11 +177,8 @@ def test_call_ollama_http_status_error():
         "error", request=MagicMock(), response=mock_response
     )
     with patch("app.services.agent.httpx.post", return_value=mock_response):
-        try:
+        with pytest.raises(httpx.HTTPStatusError):
             _call_ollama("some prompt")
-            assert False, "expected httpx.HTTPStatusError"
-        except httpx.HTTPStatusError:
-            pass
 
 
 # ── generate_insights ────────────────────────────────────────────────────────
@@ -712,8 +706,9 @@ def test_propose_reminder_ignores_a_contract_id_that_is_not_a_uuid(contract_id):
 def test_propose_reminder_refuses_without_org_id():
     # No organization never means "every organization".
     db = MagicMock()
+    tool_input = {"contract_id": uid(2), "message": "hi"}
     with pytest.raises(ValueError):
-        _run_tool("propose_reminder", {"contract_id": uid(2), "message": "hi"}, db, org_id=None)
+        _run_tool("propose_reminder", tool_input, db, org_id=None)
     db.query.assert_not_called()
 
 

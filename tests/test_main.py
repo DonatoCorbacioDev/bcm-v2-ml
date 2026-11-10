@@ -177,8 +177,9 @@ def test_lifespan_raises_when_production_without_claims_public_key(monkeypatch):
     monkeypatch.setattr(settings, "ENVIRONMENT", "production")
     monkeypatch.setattr(settings, "INTERNAL_API_KEY", "secret")
     monkeypatch.setattr(settings, "INTERNAL_CLAIMS_PUBLIC_KEY", "")
+    lifespan = _run_lifespan()
     with pytest.raises(RuntimeError, match="INTERNAL_CLAIMS_PUBLIC_KEY is unset"):
-        asyncio.run(_run_lifespan())
+        asyncio.run(lifespan)
 
 
 def test_lifespan_no_warning_when_internal_api_key_set(monkeypatch, caplog):
