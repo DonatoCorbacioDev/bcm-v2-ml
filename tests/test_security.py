@@ -48,9 +48,30 @@ def keypair():
     return private_key, base64.b64encode(public_der).decode()
 
 
-def _sign(private_key, org_id=None, manager_id=None, exp_delta=30):
-    payload = {"orgId": org_id, "managerId": manager_id, "exp": int(time.time()) + exp_delta}
-    return jwt.encode(payload, private_key, algorithm="RS256")
+def _sign(private_key, org_id=None, manager_id=None, exp_delta=30, **overrides):
+    now = int(time.time())
+    payload = {"orgId": org_id, "managerId": manager_id, "exp": now + exp_delta, "iat": now,
+               "iss": "bcm-backend", "aud": "bcm-ml"}
+    payload.update(overrides)
+    return jwt.encode({k: v for k, v in payload.items() if v is not _DROP}, private_key, algorithm="RS256")
+
+
+_DROP = object()
+
+
+@pytest.mark.parametrize("overrides", [
+    {"iss": "someone-else"}, {"iss": _DROP},
+    {"aud": "bcm-api"}, {"aud": _DROP},
+    {"exp": _DROP}, {"iat": _DROP},
+], ids=["other issuer", "no issuer", "other audience", "no audience", "no expiry", "no issue date"])
+def test_claims_reject_a_token_not_issued_for_this_service(monkeypatch, keypair, overrides):
+    private_key, public_key_b64 = keypair
+    monkeypatch.setattr(settings, "INTERNAL_CLAIMS_PUBLIC_KEY", public_key_b64)
+    token = _sign(private_key, org_id=uid(7), **overrides)
+
+    with pytest.raises(HTTPException) as exc:
+        verify_internal_claims(org_id=None, manager_id=None, x_internal_claims=token)
+    assert exc.value.status_code == 401
 
 
 def test_claims_fall_back_to_query_params_when_no_key_configured(monkeypatch):

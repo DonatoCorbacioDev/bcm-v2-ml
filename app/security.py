@@ -23,6 +23,12 @@ def verify_internal_api_key(
         )
 
 
+# Who signs the claims and for whom (backend MlClaimsSigner): a token signed
+# with the same key for any other purpose, or one with no expiry, is refused.
+CLAIMS_ISSUER = "bcm-backend"
+CLAIMS_AUDIENCE = "bcm-ml"
+
+
 class InternalClaims(BaseModel):
     """The caller's verified org_id/manager_id scope for one request.
 
@@ -65,7 +71,11 @@ def verify_internal_claims(
         public_key = serialization.load_der_public_key(
             base64.b64decode(settings.INTERNAL_CLAIMS_PUBLIC_KEY)
         )
-        payload = jwt.decode(x_internal_claims, public_key, algorithms=["RS256"])
+        payload = jwt.decode(
+            x_internal_claims, public_key, algorithms=["RS256"],
+            audience=CLAIMS_AUDIENCE, issuer=CLAIMS_ISSUER,
+            options={"require": ["exp", "iat", "iss", "aud"]},
+        )
     except jwt.PyJWTError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
