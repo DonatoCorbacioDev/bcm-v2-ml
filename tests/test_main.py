@@ -6,7 +6,7 @@ from unittest.mock import patch
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from app.main import app, lifespan
+from app.main import app, docs_urls, lifespan
 from app.config import settings
 from app.database import get_db
 
@@ -311,3 +311,17 @@ def test_risk_scores_skips_ml_merge_when_no_matching_contract():
     assert response.status_code == 200
     data = response.json()
     assert "mlScore" not in data[0]
+
+
+def test_docs_available_outside_production():
+    assert client.get("/openapi.json").status_code == 200
+    assert client.get("/docs").status_code == 200
+
+
+def test_docs_disabled_in_production():
+    from fastapi import FastAPI
+
+    production = TestClient(FastAPI(**docs_urls("production")))
+
+    for path in ("/docs", "/redoc", "/openapi.json"):
+        assert production.get(path).status_code == 404

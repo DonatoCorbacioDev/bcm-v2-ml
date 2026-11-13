@@ -29,7 +29,15 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="BCM ML Service", version="1.0.0", lifespan=lifespan)
+def docs_urls(environment: str) -> dict:
+    """Interactive docs and the OpenAPI schema list every endpoint and its
+    parameters: off in production (OWASP API8), where nobody browses them."""
+    if environment == "production":
+        return {"docs_url": None, "redoc_url": None, "openapi_url": None}
+    return {}
+
+
+app = FastAPI(title="BCM ML Service", version="1.0.0", lifespan=lifespan, **docs_urls(settings.ENVIRONMENT))
 
 app.add_middleware(
     CORSMiddleware,
