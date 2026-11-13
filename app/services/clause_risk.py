@@ -7,8 +7,15 @@ import re
 import httpx
 
 from ..config import settings
+from .llm_errors import unavailable
 
 MAX_TEXT_CHARS = 8000
+# What the model writes is checked like any input from another service (OWASP
+# API10): the frontend shows the category and reasoning as text, and an unknown
+# risk level as LOW, which would understate a risk.
+RISK_LEVELS = {"HIGH": "HIGH", "MEDIUM": "MEDIUM", "LOW": "LOW", "ALTO": "HIGH", "MEDIO": "MEDIUM", "BASSO": "LOW"}
+MAX_CATEGORY_CHARS = 80
+MAX_REASONING_CHARS = 1000
 
 _CATEGORIES_IT = (
     "Rinnovo automatico, Recesso unilaterale, Penali o danni liquidati, "
@@ -47,6 +54,29 @@ def _is_grounded(excerpt: str, source_text: str) -> bool:
     return _normalize_whitespace(excerpt) in _normalize_whitespace(source_text)
 
 
+def _clean_clause(clause: object, source_text: str) -> dict | None:
+    """The clause with only the fields the frontend shows, each of the expected
+    type and size, or None when it can't be trusted: no excerpt actually in
+    the text, no category, or a risk level outside HIGH/MEDIUM/LOW."""
+    if not isinstance(clause, dict):
+        return None
+    excerpt, category = clause.get("excerpt"), clause.get("category")
+    if not isinstance(excerpt, str) or not excerpt.strip() or not _is_grounded(excerpt, source_text):
+        return None
+    if not isinstance(category, str) or not category.strip():
+        return None
+    level = RISK_LEVELS.get(str(clause.get("riskLevel") or "").strip().upper())
+    if level is None:
+        return None
+    reasoning = clause.get("reasoning")
+    return {
+        "category": category.strip()[:MAX_CATEGORY_CHARS],
+        "excerpt": excerpt,
+        "riskLevel": level,
+        "reasoning": reasoning.strip()[:MAX_REASONING_CHARS] if isinstance(reasoning, str) else "",
+    }
+
+
 def _call_ollama(prompt: str) -> str:
     response = httpx.post(
         f"{settings.OLLAMA_URL}/api/generate",
@@ -72,7 +102,7 @@ def analyze_clauses(text: str) -> dict:
     try:
         raw = _call_ollama(prompt)
     except httpx.HTTPError as exc:
-        return {"clauses": [], "error": f"Servizio AI non disponibile: {exc}"}
+        return {"clauses": [], "error": unavailable(exc)}
 
     try:
         parsed = json.loads(raw)
@@ -85,9 +115,10 @@ def analyze_clauses(text: str) -> dict:
     # fabricates a plausible-sounding excerpt that isn't actually in the
     # source text (more likely on short/sparse OCR'd input). Neither is an
     # actionable, trustworthy finding, so drop both here.
+    if not isinstance(clauses, list):
+        return {"clauses": [], "error": "Impossibile interpretare la risposta dell'AI."}
     clauses = [
-        c for c in clauses
-        if isinstance(c, dict) and c.get("excerpt") and _is_grounded(c["excerpt"], truncated)
+        clean for clean in (_clean_clause(c, truncated) for c in clauses) if clean is not None
     ]
 
     return {"clauses": clauses, "error": None}

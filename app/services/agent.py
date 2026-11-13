@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..models import Contract
 from . import forecasting, risk_scoring
+from .llm_errors import unavailable
 from .scope import require_org
 
 TOP_RISK_CONTRACTS = 5
@@ -238,7 +239,7 @@ def generate_insights(
         prompt = _build_prompt(formatted_risk_scores, formatted_forecast, settings.REPORT_LANGUAGE)
         report = _resolve_placeholders(_call_ollama(prompt), placeholders)
     except _OLLAMA_ERRORS as exc:
-        error = f"Servizio AI non disponibile: {exc}"
+        error = unavailable(exc)
 
     return {
         "riskScores": risk_scores,
@@ -467,4 +468,4 @@ def ask_agent(
         final = _call_ollama_chat(messages, tools=None)
         return _finalize_answer(final.get("content"), placeholders, proposed_action)
     except _OLLAMA_ERRORS as exc:
-        return {"answer": None, "error": f"Servizio AI non disponibile: {exc}", "proposedAction": None}
+        return {"answer": None, "error": unavailable(exc), "proposedAction": None}

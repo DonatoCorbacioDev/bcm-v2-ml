@@ -153,3 +153,63 @@ def test_analyze_clauses_truncates_long_text():
     prompt_arg = mock_call.call_args.args[0]
     assert long_text not in prompt_arg
     assert "a" * MAX_TEXT_CHARS in prompt_arg
+
+
+# ── validation of what the model returns (OWASP API10) ──────────────────────
+
+def _analyze(raw: str, source_text: str = "The contract renews automatically each year."):
+    with patch("app.services.clause_risk._call_ollama", return_value=raw):
+        return analyze_clauses(source_text)
+
+
+def test_analyze_clauses_keeps_only_the_shown_fields_with_bounded_size():
+    import json
+    raw = json.dumps({"clauses": [{
+        "category": "  Rinnovo automatico" + "x" * 200, "excerpt": "renews automatically",
+        "riskLevel": " high ", "reasoning": "r" * 5000, "html": "<script>alert(1)</script>",
+    }]})
+    clause = _analyze(raw)["clauses"][0]
+    assert set(clause) == {"category", "excerpt", "riskLevel", "reasoning"}
+    assert clause["category"].startswith("Rinnovo automatico") and len(clause["category"]) == 80
+    assert clause["riskLevel"] == "HIGH"
+    assert len(clause["reasoning"]) == 1000
+
+
+@pytest.mark.parametrize("level, expected", [("ALTO", "HIGH"), ("medio", "MEDIUM"), ("Basso", "LOW")])
+def test_analyze_clauses_maps_italian_risk_levels(level, expected):
+    import json
+    raw = json.dumps({"clauses": [{"category": "Penali", "excerpt": "renews automatically",
+                                    "riskLevel": level, "reasoning": "..."}]})
+    assert _analyze(raw)["clauses"][0]["riskLevel"] == expected
+
+
+@pytest.mark.parametrize("clause", [
+    "not an object",
+    {"category": "Penali", "excerpt": "renews automatically", "riskLevel": "CRITICAL", "reasoning": "..."},
+    {"category": "", "excerpt": "renews automatically", "riskLevel": "HIGH", "reasoning": "..."},
+    {"category": ["Penali"], "excerpt": "renews automatically", "riskLevel": "HIGH", "reasoning": "..."},
+    {"category": "Penali", "excerpt": 42, "riskLevel": "HIGH", "reasoning": "..."},
+])
+def test_analyze_clauses_drops_what_cannot_be_trusted(clause):
+    import json
+    result = _analyze(json.dumps({"clauses": [clause]}))
+    assert result == {"clauses": [], "error": None}
+
+
+def test_analyze_clauses_tolerates_a_missing_reasoning():
+    import json
+    raw = json.dumps({"clauses": [{"category": "Penali", "excerpt": "renews automatically", "riskLevel": "LOW"}]})
+    assert _analyze(raw)["clauses"][0]["reasoning"] == ""
+
+
+def test_analyze_clauses_refuses_clauses_that_are_not_a_list():
+    result = _analyze('{"clauses": "none"}')
+    assert result == {"clauses": [], "error": "Impossibile interpretare la risposta dell'AI."}
+
+
+def test_ollama_failure_keeps_its_detail_out_of_the_answer():
+    error = httpx.ConnectError("[Errno 111] Connection refused http://host.docker.internal:11434")
+    with patch("app.services.clause_risk._call_ollama", side_effect=error):
+        result = analyze_clauses("Some contract text")
+    assert result["error"] == "Servizio AI non disponibile, riprova più tardi."
+    assert "11434" not in result["error"]
