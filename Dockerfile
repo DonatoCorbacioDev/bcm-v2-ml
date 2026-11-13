@@ -1,9 +1,8 @@
-# Do not bump to 3.14 without re-checking wheel availability: numpy==1.26.4
-# has no prebuilt wheel for 3.14 yet, and python:3.14-slim has no C compiler
-# (no cc/gcc/clang), so pip's source-build fallback fails outright
-# (meson.build: "Unknown compiler(s)"). Confirmed by actually building the
-# image, not inferred from a changelog.
-FROM python:3.11-slim
+# 3.12 is the oldest Python numpy 2.5 supports. Before any bump, check that
+# every pinned package has a prebuilt wheel for it on both amd64 and arm64
+# (the VM): python:3.x-slim has no C compiler, so a missing wheel fails the
+# build (meson.build: "Unknown compiler(s)") instead of compiling from source.
+FROM python:3.12-slim
 
 WORKDIR /app
 
