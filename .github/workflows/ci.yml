@@ -17,7 +17,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Python 3.11
+      - name: Setup Python 3.12
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -27,6 +27,13 @@ jobs:
         run: |
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
+
+      # OWASP API8: a dependency with a known vulnerability fails the build,
+      # instead of waiting in an unmerged Dependabot pull request.
+      - name: Audit dependencies for known vulnerabilities
+        run: |
+          pip install pip-audit==2.10.1
+          pip-audit -r requirements.txt -r requirements-dev.txt
 
       - name: Test with coverage
         run: pytest --cov=app --cov-report=xml
