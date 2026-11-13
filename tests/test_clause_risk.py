@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from app.services.clause_risk import (
-    MAX_TEXT_CHARS, _build_prompt, _call_ollama, _is_grounded, analyze_clauses,
+    MAX_OUTPUT_TOKENS, MAX_TEXT_CHARS, _build_prompt, _call_ollama, _is_grounded, analyze_clauses,
 )
 
 
@@ -27,6 +27,7 @@ def test_call_ollama_success():
     assert result == '{"clauses": []}'
     mock_post.assert_called_once()
     assert mock_post.call_args.kwargs["json"]["format"] == "json"
+    assert mock_post.call_args.kwargs["json"]["options"] == {"num_predict": MAX_OUTPUT_TOKENS}
 
 
 def test_call_ollama_http_status_error():
@@ -213,3 +214,30 @@ def test_ollama_failure_keeps_its_detail_out_of_the_answer():
         result = analyze_clauses("Some contract text")
     assert result["error"] == "Servizio AI non disponibile, riprova più tardi."
     assert "11434" not in result["error"]
+
+# ── an answer cut off at MAX_OUTPUT_TOKENS ──────────────────────────────────
+
+_WHOLE = '{"category": "Rinnovo automatico", "excerpt": "renews automatically", "riskLevel": "HIGH", "reasoning": "r"}'
+_MADE_UP = '{"category": "Esclusiva", "excerpt": "not in the text", "riskLevel": "LOW", "reasoning": "r"}'
+
+
+def test_a_cut_off_answer_keeps_the_clauses_written_in_full():
+    raw = '{"clauses": [' + _WHOLE + ",\n " + _MADE_UP + ', {"category": "Manleva", "excerpt": "renews'
+    result = _analyze(raw)
+    assert result["error"] is None
+    assert [c["category"] for c in result["clauses"]] == ["Rinnovo automatico"]
+
+
+def test_a_cut_off_answer_with_no_whole_clause_cannot_be_read():
+    result = _analyze('{"clauses": [{"category": "Rinnovo automatico", "excerpt": "ren')
+    assert result == {"clauses": [], "error": "Impossibile interpretare la risposta dell'AI."}
+
+
+def test_a_cut_off_answer_without_the_clauses_list_cannot_be_read():
+    result = _analyze('{"summary": "the contract renews')
+    assert result == {"clauses": [], "error": "Impossibile interpretare la risposta dell'AI."}
+
+
+def test_a_complete_answer_is_read_as_before():
+    result = _analyze('{"clauses": [' + _WHOLE + ', ' + _MADE_UP + ']}')
+    assert [c["category"] for c in result["clauses"]] == ["Rinnovo automatico"]

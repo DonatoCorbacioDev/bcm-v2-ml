@@ -16,6 +16,12 @@ MAX_TEXT_CHARS = 8000
 RISK_LEVELS = {"HIGH": "HIGH", "MEDIUM": "MEDIUM", "LOW": "LOW", "ALTO": "HIGH", "MEDIO": "MEDIUM", "BASSO": "LOW"}
 MAX_CATEGORY_CHARS = 80
 MAX_REASONING_CHARS = 1000
+# The small model walks through every category, making up excerpts for those
+# it doesn't find, so its answer runs anywhere from 200 to 900+ tokens and,
+# at about 11 tokens a second on the VM's CPU, sometimes past the timeout.
+# The cap keeps each analysis under a minute; the clauses complete when the
+# answer is cut off are kept (_complete_clauses).
+MAX_OUTPUT_TOKENS = 500
 
 _CATEGORIES_IT = (
     "Rinnovo automatico, Recesso unilaterale, Penali o danni liquidati, "
@@ -85,11 +91,41 @@ def _call_ollama(prompt: str) -> str:
             "prompt": prompt,
             "stream": False,
             "format": "json",
+            "options": {"num_predict": MAX_OUTPUT_TOKENS},
         },
         timeout=settings.OLLAMA_TIMEOUT,
     )
     response.raise_for_status()
     return response.json()["response"]
+
+
+def _complete_clauses(raw: str) -> list | None:
+    """The clauses written in full before the answer was cut off, read one at
+    a time; the one cut in half is dropped. None when not even one is whole."""
+    start = re.search(r'"clauses"\s*:\s*\[', raw)
+    if start is None:
+        return None
+    decoder = json.JSONDecoder()
+    clauses, pos = [], start.end()
+    while True:
+        while pos < len(raw) and raw[pos] in " \t\r\n,":
+            pos += 1
+        try:
+            clause, pos = decoder.raw_decode(raw, pos)
+        except json.JSONDecodeError:
+            return clauses or None
+        clauses.append(clause)
+
+
+def _parse_clauses(raw: str) -> list | None:
+    """The list of clauses in the model's answer, or None when it can't be read."""
+    try:
+        clauses = json.loads(raw)["clauses"]
+    except json.JSONDecodeError:
+        return _complete_clauses(raw)
+    except (KeyError, TypeError):
+        return None
+    return clauses if isinstance(clauses, list) else None
 
 
 def analyze_clauses(text: str) -> dict:
@@ -104,10 +140,8 @@ def analyze_clauses(text: str) -> dict:
     except httpx.HTTPError as exc:
         return {"clauses": [], "error": unavailable(exc)}
 
-    try:
-        parsed = json.loads(raw)
-        clauses = parsed["clauses"]
-    except (json.JSONDecodeError, KeyError, TypeError):
+    clauses = _parse_clauses(raw)
+    if clauses is None:
         return {"clauses": [], "error": "Impossibile interpretare la risposta dell'AI."}
 
     # The model occasionally emits a placeholder entry for a category it
@@ -115,8 +149,6 @@ def analyze_clauses(text: str) -> dict:
     # fabricates a plausible-sounding excerpt that isn't actually in the
     # source text (more likely on short/sparse OCR'd input). Neither is an
     # actionable, trustworthy finding, so drop both here.
-    if not isinstance(clauses, list):
-        return {"clauses": [], "error": "Impossibile interpretare la risposta dell'AI."}
     clauses = [
         clean for clean in (_clean_clause(c, truncated) for c in clauses) if clean is not None
     ]
