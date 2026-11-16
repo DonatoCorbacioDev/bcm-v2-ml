@@ -181,6 +181,24 @@ class TestComputeMlRiskScores:
         assert result[1]["mlScore"] == pytest.approx(0.1, abs=1e-4)
         assert result[1]["mlLevel"] == "LOW"
 
+    def test_financial_values_are_filtered_by_organization_too(self):
+        """OWASP Multi-Tenant: the totals query names the organization, not only its contracts."""
+        future = date.today() + timedelta(days=200)
+        contracts = [_make_contract(1, end_date=future, org_id=uid(1))]
+        mock_model = MagicMock()
+        mock_model.predict_proba.return_value = np.array([[0.6, 0.3, 0.1]])
+        mock_model.predict.return_value = np.array([0])
+
+        db = MagicMock()
+        db.query.return_value.filter.return_value.all.return_value = contracts
+        db.query.return_value.filter.return_value.group_by.return_value.all.return_value = []
+
+        with patch.object(ml_risk_scoring, "_load_model", return_value=mock_model):
+            ml_risk_scoring.compute_ml_risk_scores(db, org_id=uid(1))
+
+        criteria = [str(c) for call in db.query.return_value.filter.call_args_list for c in call.args]
+        assert any("financial_values.organization_id" in c for c in criteria), criteria
+
     def test_returns_empty_dict_when_prediction_raises(self):
         future = date.today() + timedelta(days=100)
         contracts = [_make_contract(1, end_date=future)]

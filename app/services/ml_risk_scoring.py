@@ -103,7 +103,9 @@ def compute_ml_risk_scores(db: Session, org_id: str | None, manager_id: str | No
             func.stddev(FinancialValue.financial_amount).label("std"),
             func.count(FinancialValue.id).label("count"),
         )
-        .filter(FinancialValue.contract_id.in_(contract_ids))
+        # The contracts are already this organization's: the organization is
+        # filtered again anyway, like every other query on its tables.
+        .filter(FinancialValue.organization_id == org_id, FinancialValue.contract_id.in_(contract_ids))
         .group_by(FinancialValue.contract_id)
         .all()
     )
