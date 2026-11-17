@@ -1,11 +1,27 @@
 # Copyright (c) 2025 Donato Corbacio. All rights reserved.
 # Licensed under the terms of the LICENSE file at the repository root.
 
+import os
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Docker secrets (OWASP Secrets Management Cheat Sheet): in production each
+# secret is a file here named after its setting (DB_URL, INTERNAL_API_KEY),
+# not an environment variable that `docker inspect` would show. An
+# environment variable of the same name still wins: production removes them.
+SECRETS_DIR = os.environ.get("SECRETS_DIR", "/run/secrets")
+
+
+def _secrets_dir() -> str | None:
+    # Only when it exists: a laptop or the tests have none, and pydantic
+    # would warn about a missing directory on every start.
+    return SECRETS_DIR if os.path.isdir(SECRETS_DIR) else None
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", secrets_dir=_secrets_dir()
+    )
 
     DB_URL: str
     CORS_ORIGINS: str = "http://localhost:3000"
