@@ -53,6 +53,15 @@ jobs:
           pip install pip-audit==2.10.1
           pip-audit -r requirements.txt -r requirements-dev.txt
 
+      # OWASP Secure Code Review: static analysis of the service's own code
+      # (shell or SQL built from strings, unsafe deserialization, weak
+      # randomness, disabled TLS checks). Fails on medium severity and up;
+      # CodeQL (codeql.yml) follows the data flow on top of it.
+      - name: Static analysis (Bandit)
+        run: |
+          pip install bandit==1.9.4
+          bandit -r app --severity-level medium --confidence-level medium -q
+
       - name: Test with coverage
         run: pytest --cov=app --cov-report=xml
         env:
