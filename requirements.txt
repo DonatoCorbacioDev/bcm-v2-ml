@@ -4,7 +4,7 @@ sqlalchemy==2.0.51
 pymysql==1.2.4
 cryptography==50.0.2
 PyJWT==2.15.1
-pandas==3.0.3
+pandas==3.1.1
 numpy==2.5.4
 scikit-learn==1.5.2
 imbalanced-learn==0.14.2
