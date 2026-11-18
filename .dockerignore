@@ -1,0 +1,31 @@
+# Only what the service runs goes into the image (app/, model/ and
+# requirements.txt): no history, no tests, no tools, no local secrets.
+.git
+.github
+.gitignore
+.env
+.env.*
+.venv
+venv
+env
+__pycache__
+**/__pycache__
+*.py[cod]
+.coverage
+coverage.xml
+.pytest_cache
+.idea
+.vscode
+.cache
+.config
+.gunicorn
+tests
+scripts
+data
+docs
+*.md
+Dockerfile
+sonar-project.properties
+requirements-dev.txt
+.coveragerc
+test.db
