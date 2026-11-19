@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     )
 
     DB_URL: str
+    # The database CA's certificate (PEM file): when set, the connection to
+    # MySQL is TLS with the server's certificate checked against it (OWASP
+    # Database Security, TLS). Required in production; empty on a laptop.
+    DB_SSL_CA: str = ""
     CORS_ORIGINS: str = "http://localhost:3000"
 
     # "development" or "production". Used only to decide whether to warn at

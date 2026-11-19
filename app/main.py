@@ -26,6 +26,11 @@ async def lifespan(_: FastAPI):
             "Without it org_id/manager_id would be taken from the query string "
             "instead of the backend-signed claims."
         )
+    if settings.ENVIRONMENT == "production" and not settings.DB_SSL_CA:
+        raise RuntimeError(
+            "ENVIRONMENT=production but DB_SSL_CA is unset: the connection to MySQL "
+            "would not check the server's certificate."
+        )
     yield
 
 

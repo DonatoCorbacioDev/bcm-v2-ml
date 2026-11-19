@@ -186,9 +186,19 @@ def test_lifespan_no_warning_when_internal_api_key_set(monkeypatch, caplog):
     monkeypatch.setattr(settings, "ENVIRONMENT", "production")
     monkeypatch.setattr(settings, "INTERNAL_API_KEY", "secret")
     monkeypatch.setattr(settings, "INTERNAL_CLAIMS_PUBLIC_KEY", "public-key")
+    monkeypatch.setattr(settings, "DB_SSL_CA", "/run/secrets/MYSQL_CA_CERT")
     with caplog.at_level(logging.WARNING):
         asyncio.run(_run_lifespan())
     assert not any("INTERNAL_API_KEY is unset" in r.message for r in caplog.records)
+
+
+def test_lifespan_raises_when_production_without_database_ca(monkeypatch):
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "INTERNAL_API_KEY", "secret")
+    monkeypatch.setattr(settings, "INTERNAL_CLAIMS_PUBLIC_KEY", "public-key")
+    monkeypatch.setattr(settings, "DB_SSL_CA", "")
+    with pytest.raises(RuntimeError, match="DB_SSL_CA is unset"):
+        asyncio.run(_run_lifespan())
 
 
 def test_anomalies_empty():
