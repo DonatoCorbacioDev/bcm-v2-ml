@@ -11,13 +11,13 @@ class Base(DeclarativeBase):
 
 
 def connect_args(ssl_ca: str) -> dict:
-    """TLS to MySQL with the server's certificate verified against the database's
-    CA, when one is given. MySQL generated that CA and its certificate names no
-    host, so the chain is checked and the host name is not (sslMode=VERIFY_CA on
-    the backend's side)."""
+    """TLS to MySQL with the server's certificate verified, when its CA is given:
+    the chain against that CA and the name against the host in DB_URL (mysql),
+    like sslMode=VERIFY_IDENTITY on the backend's side (ops/mysql/issue-tls-cert.sh
+    issues a certificate naming it)."""
     if not ssl_ca:
         return {}
-    return {"ssl": {"ca": ssl_ca, "check_hostname": False}}
+    return {"ssl": {"ca": ssl_ca, "check_hostname": True}}
 
 
 engine = create_engine(settings.DB_URL, pool_pre_ping=True, connect_args=connect_args(settings.DB_SSL_CA))
