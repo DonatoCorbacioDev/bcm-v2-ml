@@ -148,8 +148,9 @@ validated against real contract outcomes (see Limitations).
 - **Output:** `mlScore` (`P(HIGH)` from `predict_proba`) and `mlLevel`
   (`argmax` class), merged into the rule-based result per contract.
 - **Availability:** the FastAPI process loads `model/risk_model.joblib` once
-  at first request. If the file is missing (model not yet trained) or
-  loading/prediction fails, `ml_score`/`ml_level` are simply omitted — the
+  at first request, and only if its SHA-256 matches `model/risk_model.sha256`
+  (in Git). If the file is missing (model not yet trained), is not the
+  approved one, or loading/prediction fails, `ml_score`/`ml_level` are simply omitted — the
   endpoint degrades to rule-based-only, it never errors because the ML model
   isn't there.
 

@@ -18,6 +18,7 @@ Run:
     python scripts/train_risk_model.py
 """
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -228,6 +229,12 @@ def main() -> None:
     MODEL_DIR.mkdir(exist_ok=True)
     joblib.dump(calibrated, MODEL_PATH)
     print(f"\nModel saved -> {MODEL_PATH}")
+    # The service loads only the model whose hash is in this file (app/services/
+    # ml_risk_scoring._load_model): commit it, then deploy this same model.
+    digest_path = MODEL_PATH.with_suffix(".sha256")
+    digest = hashlib.sha256(MODEL_PATH.read_bytes()).hexdigest()
+    digest_path.write_text(f"{digest}  {MODEL_PATH.name}\n", encoding="ascii")
+    print(f"SHA-256 written -> {digest_path}  (commit it: without it the service refuses this model)")
 
     metadata = {
         "model_name": f"{best_name} (isotonic-calibrated)",

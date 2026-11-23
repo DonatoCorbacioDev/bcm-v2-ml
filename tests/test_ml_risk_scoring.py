@@ -105,13 +105,51 @@ class TestLoadModel:
             result = ml_risk_scoring._load_model()
         assert result is None
 
-    def test_loads_model_when_file_present(self, tmp_path):
+    @staticmethod
+    def _approved_model(tmp_path):
+        """A model file with its expected hash next to it, as in model/."""
         import joblib
         model_file = tmp_path / "risk_model.joblib"
         joblib.dump({"dummy": True}, model_file)
+        (tmp_path / "risk_model.sha256").write_text(
+            f"{ml_risk_scoring.file_digest(model_file)}  risk_model.joblib\n", encoding="ascii")
+        return model_file
+
+    def test_loads_model_when_its_hash_is_the_approved_one(self, tmp_path):
+        model_file = self._approved_model(tmp_path)
         with patch("app.services.ml_risk_scoring.MODEL_PATH", model_file):
             result = ml_risk_scoring._load_model()
-        assert result is not None
+        assert result == {"dummy": True}
+
+    def test_a_model_other_than_the_approved_one_never_reaches_joblib(self, tmp_path, caplog):
+        model_file = self._approved_model(tmp_path)
+        model_file.write_bytes(model_file.read_bytes() + b"tampered")
+        with patch("app.services.ml_risk_scoring.MODEL_PATH", model_file), \
+                patch("joblib.load") as load:
+            result = ml_risk_scoring._load_model()
+        assert result is None
+        load.assert_not_called()
+        assert any(r.levelname == "ERROR" and "NOT loaded" in r.getMessage() for r in caplog.records)
+
+    @pytest.mark.parametrize("content", [None, "", "not-a-hash  risk_model.joblib\n", "ABC" * 30])
+    def test_no_valid_expected_hash_means_no_model(self, tmp_path, caplog, content):
+        model_file = self._approved_model(tmp_path)
+        digest_file = tmp_path / "risk_model.sha256"
+        if content is None:
+            digest_file.unlink()
+        else:
+            digest_file.write_text(content, encoding="ascii")
+        with patch("app.services.ml_risk_scoring.MODEL_PATH", model_file), \
+                patch("joblib.load") as load:
+            result = ml_risk_scoring._load_model()
+        assert result is None
+        load.assert_not_called()
+        assert any(r.levelname == "ERROR" for r in caplog.records)
+
+    def test_the_repository_pins_the_model_it_expects(self):
+        """model/risk_model.sha256 is in Git and well formed: production checks against it."""
+        expected = ml_risk_scoring._expected_digest(ml_risk_scoring.MODEL_PATH)
+        assert expected is not None
 
     def test_caches_model_after_first_load(self, tmp_path):
         with patch("app.services.ml_risk_scoring.MODEL_PATH", tmp_path / "missing.joblib"):
@@ -122,8 +160,11 @@ class TestLoadModel:
         assert ml_risk_scoring._model_loaded is True
 
     def test_returns_none_on_corrupt_file(self, tmp_path):
+        # Approved by hash but unreadable: joblib's own failure, still no model.
         bad_file = tmp_path / "bad.joblib"
         bad_file.write_bytes(b"not a joblib file")
+        (tmp_path / "bad.sha256").write_text(
+            f"{ml_risk_scoring.file_digest(bad_file)}  bad.joblib\n", encoding="ascii")
         with patch("app.services.ml_risk_scoring.MODEL_PATH", bad_file):
             result = ml_risk_scoring._load_model()
         assert result is None

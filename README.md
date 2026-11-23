@@ -78,6 +78,15 @@ organization), optionally supplemented with an ML-predicted score
 is present. See [MODEL_CARD.md](./MODEL_CARD.md#2-contract-risk-scoring-get-risk-scores)
 for the full methodology, features, and measured performance.
 
+The model is loaded only if its SHA-256 is the one in `model/risk_model.sha256`,
+which is in Git (the model itself is not): `joblib.load` runs whatever code a
+file carries, so a model swapped, corrupted or simply not the approved one is
+refused, with an ERROR in the log, and scores come from the rules alone (OWASP
+ASVS 1.5, safe deserialization). `scripts/train_risk_model.py` writes the new
+hash next to the model: commit it, and deploy that same model file. The weekly
+check on the production VM (bcm-v2-docker, `ops/maintenance/check-config.sh`)
+fails while they differ.
+
 - `expiry_score`: expired = 1.0, < 30 days = 0.8, < 90 days = 0.5, < 180 days =
   0.3, otherwise = 0.1 (no end date = 0.3)
 - `risk_score = 0.6 * expiry_score + 0.4 * min(|z| / 3, 1.0)`

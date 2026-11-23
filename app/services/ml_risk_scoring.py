@@ -4,7 +4,8 @@
 """
 ML-based risk scoring service.
 
-Loads a pre-trained scikit-learn Pipeline from model/risk_model.joblib at first call.
+Loads a pre-trained scikit-learn Pipeline from model/risk_model.joblib at first call,
+only if its SHA-256 is the one in model/risk_model.sha256 (in Git; see _load_model).
 If the model file is not present (training script not yet run), all methods return
 empty results and the router falls back to rule-based scores only.
 
@@ -13,6 +14,7 @@ function scripts/generate_training_data.py calls to build training rows, so
 this module and the training pipeline can't compute features differently.
 """
 
+import hashlib
 import logging
 from datetime import date
 from pathlib import Path
@@ -34,19 +36,62 @@ _model = None
 _model_loaded = False
 
 
+def expected_digest_path(model_path: Path) -> Path:
+    """The model's expected SHA-256, kept in Git next to where the model goes."""
+    return model_path.with_suffix(".sha256")
+
+
+def file_digest(path: Path) -> str:
+    """SHA-256 of a file, read in chunks (the model is tens of megabytes)."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _expected_digest(model_path: Path) -> str | None:
+    """The hash in model/risk_model.sha256 (sha256sum's format), or None if absent or malformed."""
+    try:
+        text = expected_digest_path(model_path).read_text(encoding="ascii").split()
+    except (FileNotFoundError, UnicodeDecodeError):
+        return None
+    if not text or len(text[0]) != 64 or any(c not in "0123456789abcdef" for c in text[0]):
+        return None
+    return text[0]
+
+
 def _load_model():
+    """
+    Loads the model only if it is the one approved in Git (OWASP ASVS 1.5,
+    safe deserialization; OWASP ML Top 10, ML06): joblib.load runs whatever
+    code a pickle carries, so a file swapped, corrupted or simply the wrong
+    one must never reach it. Any mismatch is an ERROR, never a quiet fallback
+    to the rules: ops/maintenance/check-config.sh checks the same each week.
+    No model at all (CI, a fresh laptop) stays a warning, as before.
+    """
     global _model, _model_loaded
     if _model_loaded:
         return _model
     _model_loaded = True
+    if not MODEL_PATH.exists():
+        logger.warning("ML risk model not found at %s — run train_risk_model.py to enable ML scoring", MODEL_PATH)
+        return _model
+    expected = _expected_digest(MODEL_PATH)
+    if expected is None:
+        logger.error("ML risk model NOT loaded: no valid expected hash in %s", expected_digest_path(MODEL_PATH))
+        return _model
+    actual = file_digest(MODEL_PATH)
+    if actual != expected:
+        logger.error("ML risk model NOT loaded: its SHA-256 %s is not the approved %s (%s)",
+                     actual, expected, expected_digest_path(MODEL_PATH))
+        return _model
     try:
         import joblib
         _model = joblib.load(MODEL_PATH)
-        logger.info("ML risk model loaded from %s", MODEL_PATH)
-    except FileNotFoundError:
-        logger.warning("ML risk model not found at %s — run train_risk_model.py to enable ML scoring", MODEL_PATH)
+        logger.info("ML risk model loaded from %s (SHA-256 %s)", MODEL_PATH, actual)
     except Exception as exc:
-        logger.warning("Failed to load ML risk model: %s", exc)
+        logger.error("Failed to load ML risk model: %s", exc)
     return _model
 
 
